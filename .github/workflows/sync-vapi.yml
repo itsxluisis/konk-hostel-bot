@@ -16,16 +16,22 @@ jobs:
       - name: Push system prompt to Vapi
         run: |
           PROMPT=$(cat vapi/system-prompt.md)
-          PAYLOAD=$(jq -n --arg content "$PROMPT" '{
-            model: {
-              messages: [{role: "system", content: $content}]
-            }
+
+          # Fetch current model config so we preserve provider, model name, tools, etc.
+          CURRENT=$(curl -s "https://api.vapi.ai/assistant/${{ secrets.VAPI_ASSISTANT_ID }}" \
+            -H "Authorization: Bearer ${{ secrets.VAPI_API_KEY }}")
+
+          # Replace only the messages array, keep everything else intact
+          PAYLOAD=$(echo "$CURRENT" | jq --arg content "$PROMPT" '{
+            model: (.model | .messages = [{role: "system", content: $content}])
           }')
-          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/${{ secrets.VAPI_ASSISTANT_ID }}" \
+
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X PATCH \
+            "https://api.vapi.ai/assistant/${{ secrets.VAPI_ASSISTANT_ID }}" \
             -H "Authorization: Bearer ${{ secrets.VAPI_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
           HTTP_STATUS=$(echo "$RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
           BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
           echo "HTTP $HTTP_STATUS"
-          echo "$BODY" | jq '{id, name, updatedAt, message, error}' 2>/dev/null || echo "$BODY"
+          echo "$BODY" | jq '{id, name, updatedAt}' 2>/dev/null || echo "$BODY"
