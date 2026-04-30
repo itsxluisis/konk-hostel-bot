@@ -302,26 +302,8 @@ app.get('/admin/reservations-today', vapiAuth, async (req, res) => {
   }
 });
 
-// ─── ADMIN: enviar resumen de llamada a Telegram ──────────────────────────────
-app.post('/admin/send-call-summary', vapiAuth, async (req, res) => {
-  const { phone, duration, cost, summary, tipo } = req.body || {};
-  
-  try {
-    await sendTelegram(
-      `Llamada Konk Hostel\n\n` +
-      `Numero: ${phone || '—'}\n` +
-      `Tipo: ${tipo || 'Info general'}\n` +
-      `Duracion: ${duration || '—'}\n` +
-      `Coste: ${cost ? `€${cost}` : '—'}\n\n` +
-      `${summary || 'Sin resumen'}`
-    );
-    console.log(`[call-summary] Enviado a Telegram: ${phone} | ${tipo}`);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[call-summary] Error:', err.message);
-    res.status(500).json({ ok: false });
-  }
-});
+// ─── ADMIN: endpoint mantenido por compatibilidad con el panel, ya no envía Telegram ──
+app.post('/admin/send-call-summary', vapiAuth, (req, res) => res.json({ ok: true }));
 
 app.get('/health', (req, res) => {
   res.json({
@@ -342,6 +324,13 @@ app.post('/vapi/assistant-config', (req, res) => {
   if (eventType === 'end-of-call-report') {
     const msg = req.body?.message;
     console.log('[end-of-call] Recibido evento fin de llamada');
+    console.log('[end-of-call] Campos disponibles:', JSON.stringify({
+      hasSummary: !!msg?.summary,
+      hasAnalysis: !!msg?.analysis,
+      analysisKeys: msg?.analysis ? Object.keys(msg.analysis) : [],
+      summary: msg?.summary,
+      analysisSummary: msg?.analysis?.summary,
+    }));
     const duration = msg?.durationSeconds ? Math.round(msg.durationSeconds) : null;
     const cost = msg?.cost ? msg.cost.toFixed(3) : null;
     const summary = msg?.summary || msg?.analysis?.summary || null;
