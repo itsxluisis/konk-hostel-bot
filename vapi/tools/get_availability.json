@@ -1,0 +1,44 @@
+{
+  "type": "function",
+  "function": {
+    "name": "get_availability",
+    "description": "Returns availability and indicative pricing for a date range. Read-only. Source: Cloudbeds.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "check_in": {
+          "type": "string",
+          "format": "date",
+          "description": "YYYY-MM-DD."
+        },
+        "check_out": {
+          "type": "string",
+          "format": "date",
+          "description": "YYYY-MM-DD."
+        },
+        "guests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "room_type": {
+          "type": "string",
+          "enum": ["private", "dorm4", "dorm6", "any"],
+          "default": "any"
+        }
+      },
+      "required": ["check_in", "check_out", "guests"]
+    }
+  },
+  "server": {
+    "url": "{{WEBHOOK_BASE_URL}}/webhooks/get_availability",
+    "secret": "{{WEBHOOK_SECRET}}",
+    "timeoutSeconds": 8
+  },
+  "messages": [
+    {
+      "type": "request-start",
+      "content": "Consulto disponibilidad, un segundo."
+    }
+  ]
+}
