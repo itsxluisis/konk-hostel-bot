@@ -113,26 +113,6 @@ tr.cl:hover td{background:rgba(255,255,255,.02);cursor:pointer}
 .kcard-meta{font-family:var(--mono);font-size:10px;color:var(--t3)}
 .kcard-actions{display:flex;gap:5px;margin-top:7px}
 .kcol.dover .kbody{background:rgba(212,255,92,.03)}
-.wg{margin-bottom:12px}
-.wlbl{font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;padding:5px 0;border-bottom:1px solid var(--b1);margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:5px}
-.wlbl::before{content:'▸';font-size:8px;transition:transform .12s}
-.wg.open .wlbl::before{transform:rotate(90deg)}
-.witems{display:none}
-.wg.open .witems{display:block}
-.dp{position:fixed;right:0;top:0;bottom:0;width:400px;background:var(--s1);border-left:1px solid var(--b2);z-index:100;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s ease}
-.dp.open{transform:none}
-.dphd{padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between}
-.dpbody{flex:1;overflow-y:auto;padding:16px}
-.dpclose{background:none;border:none;color:var(--t3);font-size:16px;cursor:pointer;padding:3px 7px;border-radius:var(--r)}
-.dpclose:hover{color:var(--t1);background:var(--b1)}
-.txbox{background:var(--bg);border:1px solid var(--b1);border-radius:var(--r);padding:10px;font-family:var(--mono);font-size:10px;line-height:1.8;max-height:280px;overflow-y:auto}
-.tu{color:var(--t1)}.tbot{color:var(--acc)}
-.cg{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:7px}
-.ci{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:9px;position:relative}
-.ci label{color:var(--acc);font-size:9px;margin-bottom:5px}
-.ci input{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.1em;text-align:center;padding:5px}
-.crot{position:absolute;top:5px;right:5px;background:none;border:none;color:var(--t3);cursor:pointer;font-size:10px;padding:2px 4px;border-radius:3px}
-.crot:hover{color:var(--yellow)}
 .avres{background:var(--bg);border:1px solid var(--b1);border-radius:var(--r);padding:12px;font-family:var(--mono);font-size:11px;line-height:1.8;margin-top:10px;white-space:pre-wrap;display:none}
 .bars{display:flex;align-items:flex-end;gap:3px;height:52px;margin-top:6px}
 .bar{flex:1;background:var(--acc2);border-top:1px solid rgba(212,255,92,.4);border-radius:2px 2px 0 0;min-height:2px;position:relative;cursor:pointer}
@@ -146,13 +126,34 @@ tr.cl:hover td{background:rgba(255,255,255,.02);cursor:pointer}
 .rinfo{flex:1}
 .rname{font-size:12px;font-weight:500}
 .rmeta{font-family:var(--mono);font-size:10px;color:var(--t2);margin-top:1px}
-.ae{display:flex;align-items:center;gap:9px;padding:8px 10px;border-bottom:1px solid var(--b1)}
-.at{font-family:var(--mono);font-size:10px;color:var(--t3);white-space:nowrap}
+.dp{position:fixed;right:0;top:0;bottom:0;width:400px;background:var(--s1);border-left:1px solid var(--b2);z-index:100;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s ease}
+.dp.open{transform:none}
+.dphd{padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between}
+.dpbody{flex:1;overflow-y:auto;padding:16px}
+.dpclose{background:none;border:none;color:var(--t3);font-size:16px;cursor:pointer;padding:3px 7px;border-radius:var(--r)}
+.dpclose:hover{color:var(--t1);background:var(--b1)}
+.txbox{background:var(--bg);border:1px solid var(--b1);border-radius:var(--r);padding:10px;font-family:var(--mono);font-size:10px;line-height:1.8;max-height:280px;overflow-y:auto}
+.tu{color:var(--t1)}.tbot{color:var(--acc)}
 .tgrow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--b1)}
 .tgrow:last-child{border-bottom:none}
 .tginfo{flex:1;margin-right:10px}
 .tglbl{font-size:12px;font-weight:500}
 .tgdesc{font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:1px}
+.rditem{border:1px solid var(--b1);border-radius:var(--r);overflow:hidden;margin-bottom:8px}
+.rdhd{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;transition:background .12s}
+.rdhd:hover{background:var(--b1)}
+.rdchev{font-size:9px;color:var(--t3);transition:transform .15s;margin-left:auto;flex-shrink:0}
+.rditem.open .rdchev{transform:rotate(90deg)}
+.rdbody{display:none;padding:10px 12px;border-top:1px solid var(--b1);background:var(--bg)}
+.rditem.open .rdbody{display:block}
+.rdtitle{font-size:12px;font-weight:500;flex:1}
+.rddesc{font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7}
+.rddetail{font-family:var(--mono);font-size:10px;color:var(--t2);line-height:1.7;margin-top:6px;padding-top:6px;border-top:1px solid var(--b1)}
+.stbadge{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0}
+.st-pendiente{background:rgba(234,179,8,.12);color:var(--yellow)}
+.st-config{background:rgba(239,68,68,.12);color:var(--red)}
+.st-fase2{background:rgba(59,130,246,.12);color:var(--blue)}
+.st-listo{background:rgba(34,197,94,.12);color:var(--green)}
 </style>
 </head>
 <body>
@@ -185,17 +186,16 @@ tr.cl:hover td{background:rgba(255,255,255,.02);cursor:pointer}
         <div class="nsec">Principal</div>
         <button class="nbtn active" data-tab="dashboard">◈ Dashboard</button>
         <button class="nbtn" data-tab="reservations">◫ Reservas</button>
-        <button class="nbtn" data-tab="access-log">◎ Log accesos</button>
         <div class="nsec">Bot</div>
         <button class="nbtn" data-tab="assistant">✦ Asistente</button>
         <button class="nbtn" data-tab="availability">◌ Test dispon.</button>
         <button class="nbtn" data-tab="calls">▤ Historial</button>
         <div class="nsec">Operativa</div>
-        <button class="nbtn" data-tab="cabinets">⬡ Cajetines</button>
         <button class="nbtn" data-tab="urgencies">
           ⚠ Urgencias
           <span class="nbadge" id="ubadge" style="display:none">0</span>
         </button>
+        <button class="nbtn" data-tab="roadmap">◎ Roadmap</button>
         <button class="nbtn" data-tab="settings">◎ Ajustes</button>
       </nav>
       <div class="sfooter" id="sfooter">
@@ -234,11 +234,68 @@ var VA = 'https://api.vapi.ai';
 var sess = null;
 var currentTab = 'dashboard';
 var urgs = [];
-var alog = [];
 var callsList = [];
 var asstData = null;
-var rots = {};
 var dragId = null;
+
+var ROADMAP = [
+  {
+    id: 'end-call-tool',
+    title: 'Activar end_call en Vapi',
+    status: 'config',
+    desc: 'El built-in tool end_call debe habilitarse manualmente en el dashboard de Vapi.',
+    detail: 'Vapi dashboard → Assistant → Tools → activar end_call. Sin esto, el bot no puede colgar la llamada aunque el prompt lo indique en RULES.'
+  },
+  {
+    id: 'whatsapp-number',
+    title: 'Número WhatsApp del hostel',
+    status: 'config',
+    desc: 'Rellenar el placeholder {{WHATSAPP_NUMBER}} en el system prompt.',
+    detail: 'Editar vapi/system-prompt.md, sustituir {{WHATSAPP_NUMBER}} por el número real. Git push → el GitHub Action lo sincroniza automáticamente con Vapi.'
+  },
+  {
+    id: 'emergency-access',
+    title: 'Protocolo de acceso de emergencia',
+    status: 'pendiente',
+    desc: 'Cuando un huésped no puede entrar fuera de horas: pasos de troubleshooting Vikey + alerta Telegram en tiempo real.',
+    detail: 'Añadir sección VIKEY TROUBLESHOOTING al prompt: (1) Verificar que el móvil tiene datos, (2) Abrir link de confirmación de reserva, (3) Forzar cierre y reapertura de la app. Si persiste → WhatsApp urgente al equipo. Implementar tool alert_staff como llamada Vapi en tiempo real (no esperar al resumen post-llamada).'
+  },
+  {
+    id: 'alert-staff-tool',
+    title: 'Tool alert_staff en tiempo real',
+    status: 'pendiente',
+    desc: 'Herramienta Vapi que el bot activa durante la llamada para notificar al staff inmediatamente por Telegram.',
+    detail: 'Crear endpoint POST /vapi/alert-staff en server.js. Registrar en Vapi como server-side tool con parámetros: urgency (low/high/critical), issue (string), guestName (string). El bot la activa cuando detecta urgencia — sin esperar al end-of-call-report.'
+  },
+  {
+    id: 'emergency-112',
+    title: 'Regla 112 en el prompt',
+    status: 'pendiente',
+    desc: 'El prompt actual no tiene regla explícita para emergencias graves (incendio, herido, pelea).',
+    detail: 'Añadir en RULES: "Si el caller menciona incendio, persona herida, accidente o riesgo inmediato: di PRIMERO \'llama al 112\' y LUEGO indica WhatsApp del hostel para avisar al equipo." Esta regla debe ir antes de la de redirigir preguntas off-topic.'
+  },
+  {
+    id: 'vapi-key-rotation',
+    title: 'Regenerar API key de Vapi',
+    status: 'pendiente',
+    desc: 'La API key de Vapi se compartió accidentalmente en sesión de chat. Debe rotarse.',
+    detail: 'Ir a vapi.ai → Account → API Keys → revocar la clave actual y generar una nueva. Luego: gh secret set VAPI_API_KEY --repo itsxluisis/konk-hostel-bot y actualizar en EasyPanel (env vars).'
+  },
+  {
+    id: 'weekly-report',
+    title: 'Informe semanal automático',
+    status: 'fase2',
+    desc: 'Resumen semanal por Telegram: volumen de llamadas, coste total, tipos de consulta más frecuentes.',
+    detail: 'Cron job en server.js que cada lunes agrega las llamadas de la semana anterior desde la Vapi API y envía resumen a Telegram. Requiere clasificación fiable de llamadas por tipo.'
+  },
+  {
+    id: 'cloudbeds-admin',
+    title: 'Confirmar Cloudbeds OAuth',
+    status: 'fase2',
+    desc: 'Verificar que CLOUDBEDS_REFRESH_TOKEN está activo en EasyPanel y que el token no ha expirado.',
+    detail: 'En EasyPanel → env vars → confirmar CLOUDBEDS_REFRESH_TOKEN. Luego GET /health y verificar que cloudbeds aparece como "authorized". Si no, volver a autorizar en /auth/cloudbeds?token=TU_VAPI_SECRET.'
+  }
+];
 
 // ── LOGIN ──────────────────────────────────────────────────────────────────────
 document.getElementById('loginbtn').addEventListener('click', doLogin);
@@ -357,15 +414,14 @@ function logout() {
 
 // ── NAV ────────────────────────────────────────────────────────────────────────
 var tabSubs = {
-  'dashboard': 'Resumen del sistema',
-  'reservations': 'Hoy y mañana',
-  'access-log': 'Registro de accesos de emergencia',
-  'assistant': 'Prompt y configuración',
-  'availability': 'Prueba en tiempo real',
-  'calls': 'Llamadas recientes',
-  'cabinets': 'Códigos de cajetines',
-  'urgencies': 'Gestión de incidencias',
-  'settings': 'Configuración'
+  'dashboard':     'Resumen del sistema',
+  'reservations':  'Hoy y mañana',
+  'assistant':     'Prompt y configuración',
+  'availability':  'Prueba en tiempo real',
+  'calls':         'Llamadas recientes',
+  'urgencies':     'Gestión de incidencias',
+  'roadmap':       'Funciones pendientes de implementar',
+  'settings':      'Configuración'
 };
 
 document.getElementById('nav').addEventListener('click', function(e) {
@@ -380,7 +436,7 @@ document.getElementById('nav').addEventListener('click', function(e) {
   render();
 });
 
-// ── STORAGE ────────────────────────────────────────────────────────────────────
+// ── URGENCIES STORAGE ──────────────────────────────────────────────────────────
 function loadUrgs() {
   try { urgs = JSON.parse(localStorage.getItem('kurg') || '[]'); } catch(e) { urgs = []; }
   updBadge();
@@ -394,12 +450,6 @@ function updBadge() {
   var b = document.getElementById('ubadge');
   b.style.display = n > 0 ? 'inline' : 'none';
   b.textContent = n;
-}
-function loadAlog() {
-  try { alog = JSON.parse(localStorage.getItem('kalog') || '[]'); } catch(e) { alog = []; }
-}
-function saveAlog() {
-  localStorage.setItem('kalog', JSON.stringify(alog));
 }
 
 function goTab(t) {
@@ -441,7 +491,6 @@ function renderDashboard() {
       if (d && bc[d] !== undefined) bc[d] += c.cost || 0;
     });
     var mx = Math.max.apply(null, Object.values(bc).concat([0.001]));
-
     var weekTotal = Object.values(bc).reduce(function(a, b) { return a + b; }, 0);
 
     var barsHtml = wd.map(function(d) {
@@ -449,7 +498,6 @@ function renderDashboard() {
       var h2 = Math.max(3, Math.round((v / mx) * 48));
       return '<div class="bar" style="height:' + h2 + 'px"><div class="btt">€' + v.toFixed(3) + '</div></div>';
     }).join('');
-
     var lblsHtml = wd.map(function(d) {
       return '<div class="blbl">' + d.split('-')[2] + '</div>';
     }).join('');
@@ -461,11 +509,11 @@ function renderDashboard() {
           return '<div class="rc"><div class="rnum">' + (r.roomNumber || '?') + '</div><div class="rinfo"><div class="rname">' + r.guestName + '</div><div class="rmeta">' + r.checkin + ' → ' + r.checkout + '</div></div><span class="tag ' + cls + '">' + r.status + '</span></div>';
         }).join('');
 
-    var alogHtml = alog.length === 0
-      ? '<div class="empty" style="padding:16px">Sin accesos</div>'
-      : alog.slice(-3).reverse().map(function(a) {
-          return '<div class="ae"><div class="at">' + new Date(a.ts).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + '</div><div style="flex:1"><div style="font-size:12px;font-weight:500">' + a.guest + '</div><div style="font-family:var(--mono);font-size:10px;color:var(--t2)">Hab. ' + a.room + '</div></div></div>';
-        }).join('');
+    var pending = ROADMAP.filter(function(r) { return r.status === 'pendiente' || r.status === 'config'; });
+    var pendingHtml = pending.slice(0, 4).map(function(r) {
+      var cls = r.status === 'config' ? 'st-config' : 'st-pendiente';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--b1)"><div style="flex:1;font-size:12px">' + r.title + '</div><span class="stbadge ' + cls + '">' + r.status + '</span></div>';
+    }).join('');
 
     c.innerHTML = [
       '<div class="grid g4" style="margin-bottom:10px">',
@@ -479,8 +527,8 @@ function renderDashboard() {
       '<div class="card"><div class="chd"><span class="ctitle">Reservas hoy</span><button class="btn btn-sm" onclick="goTab(\'reservations\')">Ver →</button></div>' + resHtml + '</div>',
       '</div>',
       '<div class="grid g2" style="margin-top:10px">',
-      '<div class="card"><div class="chd"><span class="ctitle">Sistema</span></div><div style="font-family:var(--mono);font-size:11px;line-height:2;color:var(--t2)">Cloudbeds <span style="color:' + (h.cloudbeds === 'authorized' ? 'var(--green)' : 'var(--red)') + '">' + (h.cloudbeds === 'authorized' ? '✓' : '✗') + '</span><br>Telegram <span style="color:' + (h.telegram === 'configured' ? 'var(--green)' : 'var(--red)') + '">' + (h.telegram === 'configured' ? '✓' : '✗') + '</span><br>Cajetines <span style="color:var(--t1)">' + ((h.cabinets_configured || []).length) + '</span></div></div>',
-      '<div class="card"><div class="chd"><span class="ctitle">Accesos recientes</span><button class="btn btn-sm" onclick="goTab(\'access-log\')">Ver →</button></div>' + alogHtml + '</div>',
+      '<div class="card"><div class="chd"><span class="ctitle">Sistema</span></div><div style="font-family:var(--mono);font-size:11px;line-height:2;color:var(--t2)">Cloudbeds <span style="color:' + (h.cloudbeds === 'authorized' ? 'var(--green)' : 'var(--red)') + '">' + (h.cloudbeds === 'authorized' ? '✓' : '✗') + '</span><br>Telegram <span style="color:' + (h.telegram === 'configured' ? 'var(--green)' : 'var(--red)') + '">' + (h.telegram === 'configured' ? '✓' : '✗') + '</span><br>GitHub CI <span style="color:var(--green)">✓</span></div></div>',
+      '<div class="card"><div class="chd"><span class="ctitle">Pendientes</span><button class="btn btn-sm" onclick="goTab(\'roadmap\')">Ver →</button></div>' + (pendingHtml || '<div class="empty" style="padding:12px">Todo implementado</div>') + '</div>',
       '</div>'
     ].join('');
   });
@@ -508,24 +556,6 @@ function renderReservations() {
   });
 }
 
-// ── ACCESS LOG ─────────────────────────────────────────────────────────────────
-function renderAccessLog() {
-  var c = document.getElementById('content');
-  document.getElementById('tactions').innerHTML = '<button class="btn btn-sm" id="clalogbtn">Limpiar</button>';
-  document.getElementById('clalogbtn').addEventListener('click', clearAlog);
-  var rows = alog.length === 0
-    ? '<div class="empty">Sin accesos registrados. Aparecerán aquí cuando el bot dé un código.</div>'
-    : '<table><thead><tr><th>Fecha/Hora</th><th>Huésped</th><th>Hab.</th><th>Cajetín</th></tr></thead><tbody>' +
-      alog.slice().reverse().map(function(a) {
-        return '<tr><td style="font-family:var(--mono);font-size:11px">' + new Date(a.ts).toLocaleString('es-ES') + '</td><td>' + a.guest + '</td><td style="font-family:var(--mono);font-weight:600">' + a.room + '</td><td style="font-family:var(--mono);font-size:11px">' + a.cabinet + '</td></tr>';
-      }).join('') + '</tbody></table>';
-  c.innerHTML = '<div class="card"><div class="chd"><span class="ctitle">Registro de accesos</span><span style="font-family:var(--mono);font-size:11px;color:var(--t2)">' + alog.length + '</span></div>' + rows + '</div>';
-}
-function clearAlog() {
-  if (!confirm('¿Borrar el log?')) return;
-  alog = []; saveAlog(); renderAccessLog(); toast('Log borrado');
-}
-
 // ── ASSISTANT ──────────────────────────────────────────────────────────────────
 function renderAssistant() {
   var c = document.getElementById('content');
@@ -539,9 +569,9 @@ function renderAssistant() {
       if (sys) prompt = sys.content;
     }
     var words = prompt.split(/\s+/).filter(Boolean).length;
-    document.getElementById('tactions').innerHTML = '<button class="btn btn-acc" id="saveasstbtn">↑ Guardar</button>';
+    document.getElementById('tactions').innerHTML = '<button class="btn btn-acc" id="saveasstbtn">↑ Guardar en Vapi</button>';
     document.getElementById('saveasstbtn').addEventListener('click', saveAsst);
-    c.innerHTML = '<div class="card" style="margin-bottom:10px"><div class="ctitle">Identidad</div><div class="row"><div class="field"><label>Nombre</label><input id="an" value="' + (asstData.name || '') + '"></div><div class="field"><label>Modelo</label><input id="am" value="' + (asstData.model ? asstData.model.model || '' : '') + '"></div></div><div class="field"><label>Bienvenida</label><input id="af" value="' + ((asstData.firstMessage || '').replace(/"/g, '&quot;')) + '"></div></div><div class="card"><div class="ctitle" style="margin-bottom:8px">System prompt <span style="color:var(--t3);font-weight:400">(' + words + ' palabras)</span></div><textarea id="ap" rows="20">' + prompt + '</textarea></div>';
+    c.innerHTML = '<div class="card" style="margin-bottom:10px"><div class="ctitle">Identidad</div><div class="row"><div class="field"><label>Nombre</label><input id="an" value="' + (asstData.name || '') + '"></div><div class="field"><label>Modelo</label><input id="am" value="' + (asstData.model ? asstData.model.model || '' : '') + '"></div></div><div class="field"><label>Bienvenida</label><input id="af" value="' + ((asstData.firstMessage || '').replace(/"/g, '&quot;')) + '"></div></div><div class="card"><div class="ctitle" style="margin-bottom:8px">System prompt <span style="color:var(--t3);font-weight:400">(' + words + ' palabras)</span></div><div style="font-family:var(--mono);font-size:10px;color:var(--yellow);padding:6px 8px;background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.2);border-radius:var(--r);margin-bottom:8px">⚠ Los cambios aquí van directo a Vapi. Para que persistan en el repo, edita también vapi/system-prompt.md y haz git push.</div><textarea id="ap" rows="20">' + prompt + '</textarea></div>';
   }).catch(function(e) { c.innerHTML = '<div class="empty">Error: ' + e.message + '</div>'; });
 }
 function saveAsst() {
@@ -615,61 +645,6 @@ function openCall(id) {
   }).catch(function(e) { document.getElementById('dpbody').innerHTML = '<div class="empty">Error: ' + e.message + '</div>'; });
 }
 
-// ── CABINETS ───────────────────────────────────────────────────────────────────
-var ROOMS = [
-  { k: 'exterior_inferior', l: 'Ext. inferior', d: 'Entrada' },
-  { k: 'exterior_superior', l: 'Ext. superior', d: 'Hab. 10' },
-  { k: '1', l: 'Hab. 1', d: 'Privada' },
-  { k: '2', l: 'Hab. 2', d: '6 pax' },
-  { k: '3', l: 'Hab. 3', d: 'Privada' },
-  { k: '4', l: 'Hab. 4', d: '6 pax' },
-  { k: '5', l: 'Hab. 5', d: '4 pax' },
-  { k: '6', l: 'Hab. 6', d: 'Litera' },
-  { k: '7', l: 'Hab. 7', d: 'Privada' },
-  { k: '8', l: 'Hab. 8', d: '4 pax' },
-  { k: '9', l: 'Hab. 9', d: '6 pax' },
-  { k: '10', l: 'Hab. 10', d: 'Independ.' }
-];
-
-function renderCabinets() {
-  var c = document.getElementById('content');
-  c.innerHTML = '<div class="empty"><span class="spin"></span></div>';
-  hookGet('/admin/cabinets').then(function(d) {
-    var codes = d.codes || {};
-    document.getElementById('tactions').innerHTML = '<button class="btn btn-acc" id="savecabsbtn">↑ Guardar</button>';
-    document.getElementById('savecabsbtn').addEventListener('click', saveCabs);
-    var items = ROOMS.map(function(r) {
-      return '<div class="ci"><label>' + r.l + '<br><span style="color:var(--t3)">' + r.d + '</span></label><input type="password" id="c-' + r.k + '" value="' + (codes[r.k] || '') + '" onfocus="this.type=\'text\'" onblur="this.type=\'password\'" placeholder="----"><button class="crot" data-key="' + r.k + '" title="Programar rotación">' + (rots[r.k] ? '⏰' : '↻') + '</button></div>';
-    }).join('');
-    c.innerHTML = '<div class="card"><div class="ctitle">Códigos actuales</div><p style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-bottom:12px">Pulsa ↻ para programar rotación al día siguiente.</p><div class="cg">' + items + '</div><div style="margin-top:10px;padding:8px 10px;background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.2);border-radius:var(--r);font-family:var(--mono);font-size:10px;color:var(--yellow)">⚠ Los cambios actualizan en memoria. Para persistir, copia CABINET_CODES a EasyPanel.</div></div>';
-    c.querySelectorAll('.crot').forEach(function(btn) {
-      btn.addEventListener('click', function() { schedRot(btn.dataset.key); });
-    });
-  }).catch(function(e) { c.innerHTML = '<div class="empty">Error: ' + e.message + '</div>'; });
-}
-function saveCabs() {
-  var codes = {};
-  ROOMS.forEach(function(r) {
-    var inp = document.getElementById('c-' + r.k);
-    if (inp && inp.value.trim()) codes[r.k] = inp.value.trim();
-  });
-  hookPost('/admin/cabinets', { codes: codes })
-    .then(function() { toast('Guardado'); })
-    .catch(function(e) { toast('Error: ' + e.message, 'err'); });
-}
-function schedRot(key) {
-  if (rots[key]) {
-    delete rots[key];
-    toast('Rotación cancelada');
-  } else {
-    rots[key] = true;
-    hookPost('/admin/schedule-rotation', { cabinet: key })
-      .then(function() { toast('Rotación programada — aviso Telegram'); })
-      .catch(function() { toast('Marcado localmente'); });
-  }
-  renderCabinets();
-}
-
 // ── URGENCIES ──────────────────────────────────────────────────────────────────
 function renderUrgencies() {
   var c = document.getElementById('content');
@@ -699,12 +674,9 @@ function renderUrgencies() {
     col('Resuelto', 'var(--green)', resolved, 'col-re') +
     '</div>';
 
-  c.querySelectorAll('.kcard').forEach(function(card) {
-    card.addEventListener('dragstart', function(e) {
-      dragId = card.dataset.id;
-      card.classList.add('dragging');
-    });
-    card.addEventListener('dragend', function() { card.classList.remove('dragging'); });
+  c.querySelectorAll('.kcard').forEach(function(kc) {
+    kc.addEventListener('dragstart', function() { dragId = kc.dataset.id; kc.classList.add('dragging'); });
+    kc.addEventListener('dragend', function() { kc.classList.remove('dragging'); });
   });
 
   ['col-in', 'col-es', 'col-re'].forEach(function(colId) {
@@ -765,45 +737,58 @@ function openHistory() {
       var ts = u.ts ? new Date(u.ts).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
       return '<div style="padding:7px 0;border-bottom:1px solid var(--b1)"><div style="font-size:12px;font-weight:500">' + (u.reason || 'Incidencia') + '</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3)">' + (u.guest || '—') + ' · ' + ts + '</div></div>';
     }).join('');
-    return '<div class="wg open"><div class="wlbl">Semana del ' + dateStr + ' <span style="color:var(--t2)">(' + wks[w].length + ')</span></div><div class="witems">' + items + '</div></div>';
+    return '<div style="margin-bottom:10px"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-bottom:6px">Semana del ' + dateStr + ' (' + wks[w].length + ')</div>' + items + '</div>';
   }).join('') || '<div class="empty">Sin urgencias resueltas</div>';
   openDP('Historial resueltas', res.length + ' total', html);
-  c_afterDP();
 }
 
-function c_afterDP() {
-  document.querySelectorAll('.wlbl').forEach(function(el) {
-    el.addEventListener('click', function() { el.parentElement.classList.toggle('open'); });
+// ── ROADMAP ────────────────────────────────────────────────────────────────────
+function renderRoadmap() {
+  var c = document.getElementById('content');
+  var byStatus = { config: [], pendiente: [], fase2: [], listo: [] };
+  ROADMAP.forEach(function(r) { (byStatus[r.status] || byStatus.pendiente).push(r); });
+
+  function section(title, color, items) {
+    if (items.length === 0) return '';
+    var cards = items.map(function(r) {
+      var cls = 'st-' + r.status;
+      return '<div class="rditem" id="rd-' + r.id + '">' +
+        '<div class="rdhd" data-rdid="' + r.id + '">' +
+        '<span class="stbadge ' + cls + '" style="margin-right:2px">' + r.status + '</span>' +
+        '<span class="rdtitle">' + r.title + '</span>' +
+        '<span class="rdchev">▸</span>' +
+        '</div>' +
+        '<div class="rdbody">' +
+        '<div class="rddesc">' + r.desc + '</div>' +
+        '<div class="rddetail">' + r.detail + '</div>' +
+        '</div>' +
+        '</div>';
+    }).join('');
+    return '<div style="margin-bottom:18px"><div style="font-family:var(--mono);font-size:9px;color:' + color + ';text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">' + title + ' (' + items.length + ')</div>' + cards + '</div>';
+  }
+
+  c.innerHTML = '<div style="max-width:680px">' +
+    section('Requiere configuración', 'var(--red)', byStatus.config) +
+    section('Pendiente de implementar', 'var(--yellow)', byStatus.pendiente) +
+    section('Fase 2', 'var(--blue)', byStatus.fase2) +
+    section('Completado', 'var(--green)', byStatus.listo) +
+    '</div>';
+
+  c.querySelectorAll('.rdhd').forEach(function(hd) {
+    hd.addEventListener('click', function() {
+      var item = document.getElementById('rd-' + hd.dataset.rdid);
+      if (item) item.classList.toggle('open');
+    });
   });
 }
 
 // ── SETTINGS ───────────────────────────────────────────────────────────────────
 function renderSettings() {
   var c = document.getElementById('content');
-  var tgs = JSON.parse(localStorage.getItem('ktgs') || '{"emergencies":true,"access":true,"reservations":false,"errors":true}');
   var cost = localStorage.getItem('kvcost') || '0.11';
 
-  var tgItems = [
-    { k: 'emergencies', l: 'Urgencias detectadas', d: 'Cuando el bot detecta emergencia' },
-    { k: 'access', l: 'Accesos de emergencia', d: 'Cuando se da código de cajetín' },
-    { k: 'reservations', l: 'Nuevas reservas', d: 'Cuando entra reserva en Cloudbeds' },
-    { k: 'errors', l: 'Errores del servidor', d: 'Fallos técnicos del webhook' }
-  ];
+  c.innerHTML = '<div class="grid g2"><div class="card"><div class="ctitle">Seguridad</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.8;margin-bottom:12px">Usuario y contraseña configurados en EasyPanel como ADMIN_USER y ADMIN_PASSWORD.<br>Webhook secret: VAPI_SECRET en EasyPanel.</div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Regenerar API key Vapi</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">1. vapi.ai → Account → API Keys → revocar y crear nueva<br>2. gh secret set VAPI_API_KEY --repo itsxluisis/konk-hostel-bot<br>3. Actualizar en EasyPanel env vars</div></div><div class="card"><div class="ctitle">Coste por minuto</div><div class="field"><label>Tarifa actual (€/min)</label><input type="number" id="vcost" value="' + cost + '" step="0.001" min="0"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:4px">Actualiza si cambias de plan en Vapi</div><button class="btn" style="margin-top:6px" id="savevcostbtn">Guardar</button></div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Cloudbeds OAuth</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">Para reautorizar: GET /auth/cloudbeds?token=TU_VAPI_SECRET<br>Callback: /auth/cloudbeds/callback<br>Luego copiar CLOUDBEDS_REFRESH_TOKEN a EasyPanel.</div></div></div>';
 
-  var tgRows = tgItems.map(function(item) {
-    return '<div class="tgrow"><div class="tginfo"><div class="tglbl">' + item.l + '</div><div class="tgdesc">' + item.d + '</div></div><label class="toggle"><input type="checkbox" data-key="' + item.k + '"' + (tgs[item.k] ? ' checked' : '') + '><span class="tslider"></span></label></div>';
-  }).join('');
-
-  c.innerHTML = '<div class="grid g2"><div class="card"><div class="ctitle">Notificaciones Telegram</div>' + tgRows + '<div class="field" style="margin-top:12px"><label>Chat ID de Telegram</label><input id="tgcid" placeholder="Tu chat ID"><button class="btn" style="margin-top:5px" id="savetgbtn">Guardar</button></div></div><div class="card"><div class="ctitle">Coste por minuto</div><div class="field"><label>Tarifa actual (€/min)</label><input type="number" id="vcost" value="' + cost + '" step="0.001" min="0"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:4px">Actualiza si cambias de plan en Vapi</div><button class="btn" style="margin-top:6px" id="savevcostbtn">Guardar</button></div><div class="divider"></div><div class="ctitle">Seguridad</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.8">Usuario y contraseña configurados en EasyPanel como ADMIN_USER y ADMIN_PASSWORD.</div></div></div>';
-
-  c.querySelectorAll('[data-key]').forEach(function(inp) {
-    inp.addEventListener('change', function() {
-      var s = JSON.parse(localStorage.getItem('ktgs') || '{}');
-      s[inp.dataset.key] = inp.checked;
-      localStorage.setItem('ktgs', JSON.stringify(s));
-    });
-  });
-  document.getElementById('savetgbtn').addEventListener('click', function() { toast('Guardado'); });
   document.getElementById('savevcostbtn').addEventListener('click', function() {
     localStorage.setItem('kvcost', document.getElementById('vcost').value);
     toast('Guardado');
@@ -814,12 +799,11 @@ function renderSettings() {
 function render() {
   if (currentTab === 'dashboard') renderDashboard();
   else if (currentTab === 'reservations') renderReservations();
-  else if (currentTab === 'access-log') renderAccessLog();
   else if (currentTab === 'assistant') renderAssistant();
   else if (currentTab === 'availability') renderAvailability();
   else if (currentTab === 'calls') renderCalls();
-  else if (currentTab === 'cabinets') renderCabinets();
   else if (currentTab === 'urgencies') renderUrgencies();
+  else if (currentTab === 'roadmap') renderRoadmap();
   else if (currentTab === 'settings') renderSettings();
 }
 
@@ -839,7 +823,7 @@ function checkNewCalls() {
       var duration = c.duration ? Math.floor(c.duration/60) + 'm ' + (Math.round(c.duration)%60) + 's' : '—';
       var cost = c.cost ? c.cost.toFixed(3) : null;
       var transcript = (c.transcript || '').toLowerCase();
-      var tipo = transcript.indexOf('cajetín') !== -1 || transcript.indexOf('no puedo entrar') !== -1 ? 'Emergencia acceso' :
+      var tipo = transcript.indexOf('no puedo entrar') !== -1 ? 'Emergencia acceso' :
                  transcript.indexOf('disponibilidad') !== -1 || transcript.indexOf('reservar') !== -1 ? 'Consulta reserva' :
                  transcript.indexOf('pelea') !== -1 || transcript.indexOf('emergencia') !== -1 ? 'URGENCIA' : 'Info general';
       fetch(WH + '/admin/send-call-summary', {
@@ -863,7 +847,6 @@ function checkNewCalls() {
 
 function init() {
   loadUrgs();
-  loadAlog();
   refreshStatus();
   setInterval(refreshStatus, 30000);
   setInterval(checkNewCalls, 2 * 60 * 1000);

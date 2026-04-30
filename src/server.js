@@ -324,17 +324,11 @@ app.post('/admin/send-call-summary', vapiAuth, async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  const codes = (() => {
-    try { return Object.keys(JSON.parse(process.env.CABINET_CODES || '{}')); }
-    catch { return []; }
-  })();
-
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     cloudbeds: !!process.env.CLOUDBEDS_REFRESH_TOKEN ? 'authorized' : 'pending_auth',
     telegram: !!process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'missing',
-    cabinets_configured: codes,
   });
 });
 
