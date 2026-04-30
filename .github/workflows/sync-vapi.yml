@@ -1,0 +1,26 @@
+name: Sync system prompt → Vapi
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - vapi/system-prompt.md
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push system prompt to Vapi
+        run: |
+          PROMPT=$(cat vapi/system-prompt.md)
+          PAYLOAD=$(jq -n --arg content "$PROMPT" '{
+            model: {
+              messages: [{role: "system", content: $content}]
+            }
+          }')
+          curl -s -X PATCH "https://api.vapi.ai/assistant/${{ secrets.VAPI_ASSISTANT_ID }}" \
+            -H "Authorization: Bearer ${{ secrets.VAPI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" | jq '{id, name, updatedAt}'
