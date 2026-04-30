@@ -21,7 +21,11 @@ jobs:
               messages: [{role: "system", content: $content}]
             }
           }')
-          curl -s -X PATCH "https://api.vapi.ai/assistant/${{ secrets.VAPI_ASSISTANT_ID }}" \
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/${{ secrets.VAPI_ASSISTANT_ID }}" \
             -H "Authorization: Bearer ${{ secrets.VAPI_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" | jq '{id, name, updatedAt}'
+            -d "$PAYLOAD")
+          HTTP_STATUS=$(echo "$RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP_STATUS"
+          echo "$BODY" | jq '{id, name, updatedAt, message, error}' 2>/dev/null || echo "$BODY"
