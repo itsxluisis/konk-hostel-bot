@@ -32,6 +32,9 @@ Nearby: Playa Calafría 5 min walk · Playa Barco Perdido 8 min walk · Cabo de 
 
 Activities: hiking, fishing, snorkelling, scuba diving, kayaking, paddleboarding.
 
+No parking available.
+No pets allowed.
+No breakfast service — guests use the communal kitchen to prepare their own food.
 No additional supplies (soap, shampoo, towels) provided — welcome amenities only.
 
 ---
@@ -88,7 +91,7 @@ Only if they say yes, continue with the flow:
 5. Say "Para reservar entra en konkhostel punto es." then STOP
 
 Cancellations:
-- Via konkhostel.es: email reservas@konkhostel.es. Free within 3 days before check-in, full amount after.
+- Via konkhostel.es: email reservas@konkhostel.es. Free if cancelled more than 3 days before check-in. 100% charge if cancelled within 3 days of check-in.
 - Via other platforms: manage on that platform.
 
 Groups 7+: reservas@konkhostel.es
