@@ -359,13 +359,16 @@ app.post('/vapi/assistant-config', (req, res) => {
     return res.json({});
   }
 
-  // Ignorar otros eventos no relevantes
+  // Ignorar eventos frecuentes sin interés
   const ignoredEvents = ['speech-update', 'status-update', 'conversation-update'];
   if (ignoredEvents.includes(eventType)) {
     return res.json({});
   }
 
-  console.log(`[assistant-config] Evento: ${eventType}`);
+  // Log de cualquier evento no reconocido para detectar el end-of-call-report
+  if (eventType !== 'assistant-request') {
+    console.log(`[assistant-config] Evento no manejado: "${eventType}" | keys: ${Object.keys(req.body?.message || {}).join(',')}`);
+  }
 
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-GB', {
