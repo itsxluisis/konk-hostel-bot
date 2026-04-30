@@ -449,59 +449,6 @@ OAuth:
   if (!process.env.TELEGRAM_BOT_TOKEN) console.warn('⚠️  TELEGRAM_BOT_TOKEN no configurado');
   if (!process.env.VAPI_SECRET) console.warn('⚠️  VAPI_SECRET no configurado — los endpoints no están protegidos');
 
-  // ── Cron: resumen de llamadas cada 5 minutos ───────────────────────────────
-  const axios = require('axios');
-  
-  let lastChecked = new Date().toISOString();
-
-  setInterval(async () => {
-    const vapiKey = process.env.VAPI_API_KEY || process.env.VAPI_SECRET;
-    if (!vapiKey) return;
-
-    try {
-      const resp = await axios.get('https://api.vapi.ai/call', {
-        headers: { Authorization: `Bearer ${vapiKey}` },
-        params: { limit: 10 },
-        timeout: 8000,
-      });
-
-      const calls = resp.data || [];
-      const newCalls = calls.filter(c =>
-        c.status === 'ended' &&
-        c.endedAt &&
-        new Date(c.endedAt) > new Date(lastChecked)
-      );
-
-      for (const call of newCalls) {
-        const duration = call.duration ? Math.round(call.duration) : 0;
-        const durStr = `${Math.floor(duration/60)}m ${duration%60}s`;
-        const cost = call.cost ? `€${call.cost.toFixed(3)}` : '—';
-        const phone = call.customer?.number || 'test';
-        const summary = call.summary || call.analysis?.summary || null;
-        const transcript = (call.transcript || '').toLowerCase();
-
-        const tipo = transcript.includes('cajetín') || transcript.includes('no puedo entrar') ? 'Emergencia acceso' :
-                     transcript.includes('disponibilidad') || transcript.includes('reservar') ? 'Consulta reserva' :
-                     transcript.includes('pelea') || transcript.includes('emergencia') ? 'URGENCIA' :
-                     'Info general';
-
-        console.log(`[cron] Nueva llamada finalizada: ${phone} | ${tipo} | ${durStr}`);
-        await sendTelegram(
-          `Llamada Konk Hostel\n\n` +
-          `Numero: ${phone}\n` +
-          `Tipo: ${tipo}\n` +
-          `Duracion: ${durStr}\n` +
-          `Coste: ${cost}\n\n` +
-          `${summary || 'Sin resumen'}`
-        );
-      }
-
-      if (newCalls.length > 0) lastChecked = new Date().toISOString();
-
-    } catch (err) {
-      console.error('[cron] Error consultando Vapi:', err.message);
-    }
-  }, 5 * 60 * 1000); // cada 5 minutos
 
 });
 
