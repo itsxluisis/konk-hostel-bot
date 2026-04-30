@@ -241,10 +241,10 @@ var dragId = null;
 var ROADMAP = [
   {
     id: 'end-call-tool',
-    title: 'Activar end_call en Vapi',
-    status: 'config',
-    desc: 'El built-in tool end_call debe habilitarse manualmente en el dashboard de Vapi.',
-    detail: 'Vapi dashboard → Assistant → Tools → activar end_call. Sin esto, el bot no puede colgar la llamada aunque el prompt lo indique en RULES.'
+    title: 'end_call activado en Vapi',
+    status: 'listo',
+    desc: 'El built-in tool end_call está configurado en el asistente.',
+    detail: 'Tool habilitada en Vapi dashboard → Assistant → Tools. El bot puede colgar la llamada tras el saludo de despedida.'
   },
   {
     id: 'whatsapp-number',
@@ -257,8 +257,8 @@ var ROADMAP = [
     id: 'emergency-access',
     title: 'Protocolo de acceso de emergencia',
     status: 'pendiente',
-    desc: 'Cuando un huésped no puede entrar fuera de horas: pasos de troubleshooting Vikey + alerta Telegram en tiempo real.',
-    detail: 'Añadir sección VIKEY TROUBLESHOOTING al prompt: (1) Verificar que el móvil tiene datos, (2) Abrir link de confirmación de reserva, (3) Forzar cierre y reapertura de la app. Si persiste → WhatsApp urgente al equipo. Implementar tool alert_staff como llamada Vapi en tiempo real (no esperar al resumen post-llamada).'
+    desc: 'Si un huésped no puede entrar, el bot le dirige al chat UpMarket. Sin troubleshooting Vikey por ahora.',
+    detail: 'El flujo actual es suficiente para fase 1: incidencia de acceso → WhatsApp UpMarket concierge. En fase futura se puede añadir troubleshooting básico de Vikey en el prompt (verificar datos móvil, reabrir link). Por ahora no añade complejidad innecesaria.'
   },
   {
     id: 'alert-staff-tool',
@@ -270,9 +270,9 @@ var ROADMAP = [
   {
     id: 'emergency-112',
     title: 'Regla 112 en el prompt',
-    status: 'pendiente',
-    desc: 'El prompt actual no tiene regla explícita para emergencias graves (incendio, herido, pelea).',
-    detail: 'Añadir en RULES: "Si el caller menciona incendio, persona herida, accidente o riesgo inmediato: di PRIMERO \'llama al 112\' y LUEGO indica WhatsApp del hostel para avisar al equipo." Esta regla debe ir antes de la de redirigir preguntas off-topic.'
+    status: 'listo',
+    desc: 'Regla añadida: emergencias graves → 112 primero, luego WhatsApp UpMarket.',
+    detail: 'Rule 1 en RULES del prompt: grave emergencies (fire, injured, violence) → say "Llama al 112 ahora mismo" FIRST, no exceptions. Después redirige al WhatsApp de la reserva. La regla tiene prioridad sobre Rule 8 (only hostel questions).'
   },
   {
     id: 'vapi-key-rotation',
