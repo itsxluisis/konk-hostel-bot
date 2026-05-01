@@ -373,6 +373,7 @@ app.post('/vapi/assistant-config', (req, res) => {
     const summary = msg?.summary || msg?.analysis?.summary || null;
     const transcript = msg?.transcript || '';
     const phone = msg?.customer?.number || 'test';
+    const structuredData = msg?.analysis?.structuredData || null;
 
     const tl = transcript.toLowerCase();
     const tipo = tl.includes('cajetín') || tl.includes('código') || tl.includes('no puedo entrar') ? 'Emergencia acceso' :
@@ -381,15 +382,24 @@ app.post('/vapi/assistant-config', (req, res) => {
                  'Info general';
 
     const durStr = duration ? `${Math.floor(duration/60)}m ${duration%60}s` : '—';
-    console.log(`[end-of-call] ${phone} | ${tipo} | ${durStr} | €${cost||'—'}`);
 
-    
+    let callbackLine = '';
+    if (structuredData) {
+      const emoji = structuredData.llamar ? '📞' : '✅';
+      const label = structuredData.llamar ? 'LLAMAR' : 'No llamar';
+      const motivo = structuredData.motivo || '';
+      callbackLine = `\n${emoji} ${label}${motivo ? ` — ${motivo}` : ''}`;
+    }
+
+    console.log(`[end-of-call] ${phone} | ${tipo} | ${durStr} | €${cost||'—'} | callback: ${structuredData?.llamar ?? '?'}`);
+
     sendTelegram(
       `Llamada Konk Hostel\n\n` +
       `Numero: ${phone}\n` +
       `Tipo: ${tipo}\n` +
       `Duracion: ${durStr}\n` +
-      `Coste: ${cost ? `€${cost}` : '—'}\n\n` +
+      `Coste: ${cost ? `€${cost}` : '—'}` +
+      `${callbackLine}\n\n` +
       `${summary || 'Sin resumen'}`
     ).catch(console.error);
 
