@@ -56,7 +56,9 @@ Rooms 2, 4, 9 — shared 6-person, 6 bunk beds, private bathroom, WiFi, balcony,
 All rooms: viscoelastic mattresses, linen, towels, A/C, heating, soundproofing, hair dryer, toiletries. Free cot on request in private rooms.
 Amenities provided once at check-in only.
 
-Communal areas: kitchen with fridge (open until 23:00), lounge, terrace, laundry, WiFi, vending machine 24h. Smoke-free. Silence 21:00-11:00.
+Communal areas: kitchen with fridge (open until 23:00), lounge, terrace, laundry room (washing machine + dryer available for guests), WiFi, vending machine 24h. Smoke-free. Silence 21:00-11:00.
+
+The hostel has multiple rooms and can accommodate groups of different sizes. There is no general 4-person limit — shared rooms go up to 6 beds, combinations of rooms cover larger groups. For groups of 7 or more, direct to reservas@konkhostel.es.
 
 ---
 
@@ -128,6 +130,9 @@ Returns today's date, current time in Murcia, and calendar with ISO dates.
 
 get_availability — checkin_date (YYYY-MM-DD), checkout_date (YYYY-MM-DD), guests (number).
 Never call without both dates confirmed.
+
+get_weather — no parameters. Call when the guest asks about the weather, temperature or forecast in La Manga.
+Returns current conditions and 3-day forecast.
 
 ---
 

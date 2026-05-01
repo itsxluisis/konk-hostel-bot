@@ -225,7 +225,44 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
 
 
 
-// ─── VAPI TOOL: alert_staff ───────────────────────────────────────────────────
+// ─── VAPI TOOL: get_weather ──────────────────────────────────────────────────
+// La Manga del Mar Menor: 37.64°N, -0.73°E
+app.post('/vapi/get-weather', vapiAuth, async (req, res) => {
+  const axios = require('axios');
+  const WMO = (c) => {
+    if (c === 0) return 'cielo despejado';
+    if (c <= 3) return 'parcialmente nublado';
+    if (c <= 48) return 'niebla';
+    if (c <= 57) return 'llovizna';
+    if (c <= 67) return 'lluvia';
+    if (c <= 77) return 'nieve';
+    if (c <= 82) return 'chubascos';
+    return 'tormenta';
+  };
+  try {
+    const { data } = await axios.get('https://api.open-meteo.com/v1/forecast', {
+      params: {
+        latitude: 37.64, longitude: -0.73,
+        current_weather: true,
+        daily: 'temperature_2m_max,temperature_2m_min,weathercode,precipitation_sum',
+        timezone: 'Europe/Madrid',
+        forecast_days: 3,
+      },
+      timeout: 8000,
+    });
+    const cur = data.current_weather;
+    const d = data.daily;
+    const labels = ['hoy', 'mañana', 'pasado mañana'];
+    const days = d.time.slice(0, 3).map((_, i) =>
+      `${labels[i]}: ${WMO(d.weathercode[i])}, entre ${Math.round(d.temperature_2m_min[i])} y ${Math.round(d.temperature_2m_max[i])} grados`
+    ).join('; ');
+    console.log(`[get-weather] ${Math.round(cur.temperature)}°C, ${WMO(cur.weathercode)}`);
+    return vapiReply(req, res, `Ahora mismo en La Manga: ${WMO(cur.weathercode)}, ${Math.round(cur.temperature)} grados. Previsión: ${days}.`);
+  } catch (err) {
+    console.error('[get-weather] Error:', err.message);
+    return vapiReply(req, res, 'No he podido consultar el tiempo ahora mismo. Puedes ver la previsión en el buscador.');
+  }
+});
 
 // ─── VAPI TOOL: get_current_date ─────────────────────────────────────────────
 // El bot llama esto cuando necesita saber la fecha/hora actual
