@@ -227,7 +227,7 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
 
 // ─── VAPI TOOL: get_weather ──────────────────────────────────────────────────
 // La Manga del Mar Menor: 37.64°N, -0.73°E
-app.post('/vapi/get-weather', vapiAuth, async (req, res) => {
+app.post('/vapi/get-weather', async (req, res) => {
   const axios = require('axios');
   const WMO = (c) => {
     if (c === 0) return 'cielo despejado';
