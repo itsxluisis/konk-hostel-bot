@@ -128,7 +128,7 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   const todayISO = nowMurcia.toISOString().split('T')[0];
   const h = nowMurcia.getHours(), m = nowMurcia.getMinutes();
   if (checkin_date === todayISO && (h > 22 || (h === 22 && m >= 30))) {
-    return vapiReply(req, res, 'Lo siento, las reservas para esta noche ya han cerrado. El plazo límite es las 22:30. ¿Te consulto disponibilidad para mañana u otra fecha?');
+    return vapiReply(req, res, 'Lo siento, las reservas para esta noche ya han cerrado. El plazo límite son las diez y media de la noche. ¿Te consulto disponibilidad para mañana u otra fecha?');
   }
 
   console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} personas)`);
