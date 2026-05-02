@@ -123,6 +123,14 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     return vapiReply(req, res, 'Necesito las fechas de entrada y salida para consultar disponibilidad.');
   }
 
+  // Corte de reservas: misma noche a partir de las 22:30 (hora de Murcia)
+  const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
+  const todayISO = nowMurcia.toISOString().split('T')[0];
+  const h = nowMurcia.getHours(), m = nowMurcia.getMinutes();
+  if (checkin_date === todayISO && (h > 22 || (h === 22 && m >= 30))) {
+    return vapiReply(req, res, 'Lo siento, las reservas para esta noche ya han cerrado. El plazo límite es las 22:30. ¿Te consulto disponibilidad para mañana u otra fecha?');
+  }
+
   console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} personas)`);
 
   const bookingUrl = `https://www.booking.com/hotel/es/konk-hostel.es.html?checkin=${checkin_date}&checkout=${checkout_date}&group_adults=${guests}`;
