@@ -123,6 +123,10 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     return vapiReply(req, res, 'Necesito las fechas de entrada y salida para consultar disponibilidad.');
   }
 
+  if (checkin_date >= checkout_date) {
+    return vapiReply(req, res, 'La salida tiene que ser al menos un día después de la entrada. ¿Para qué día sería el checkout?');
+  }
+
   // Corte de reservas: misma noche a partir de las 22:30 (hora de Murcia)
   const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
   const todayISO = nowMurcia.toISOString().split('T')[0];
