@@ -46,7 +46,7 @@ Room 10 — independent street access, king bed, private bathroom, WiFi. Communa
 
 Rooms 1, 7 — private double, king bed, private bathroom, WiFi, balcony. Full communal access.
 
-Adapted room (room 3) — private double, adapted bathroom, accessible, WiFi. Full communal access.
+Adapted room (room 3) — private double, adapted bathroom, accessible, WiFi. Full communal access. When mentioning this room, always say "habitación adaptada" or "habitación accesible" — never "para minusválidos" or similar outdated terms.
 
 Room for 2 couples (room 6) — bunk 150x200 (sleeps 4), private bathroom, sofa, WiFi. Full communal access.
 
