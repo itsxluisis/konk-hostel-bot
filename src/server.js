@@ -185,11 +185,11 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
 
       let desc;
       if (extraBeds === 0) {
-        desc = `${nHab(fullRooms)} de ${cap} camas a ${r.price} euros por cama, ${subtotal} euros en total`;
+        desc = `${nHab(fullRooms)} compartida${fullRooms > 1 ? 's' : ''} a ${r.price} euros por cama, ${subtotal} euros en total`;
       } else if (fullRooms === 0) {
-        desc = `${bedsToUse} cama${bedsToUse > 1 ? 's' : ''} en una habitación de ${cap} a ${r.price} euros por cama, ${subtotal} euros`;
+        desc = `camas en habitación compartida a ${r.price} euros por cama, ${subtotal} euros en total`;
       } else {
-        desc = `${nHab(fullRooms)} completa${fullRooms > 1 ? 's' : ''} de ${cap} camas más ${extraBeds} cama${extraBeds > 1 ? 's' : ''} en otra habitación del mismo tipo, todo a ${r.price} euros por cama, ${subtotal} euros`;
+        desc = `${nHab(fullRooms)} completa${fullRooms > 1 ? 's' : ''} más camas en otra habitación compartida, todo a ${r.price} euros por cama, ${subtotal} euros en total`;
       }
 
       combo.push({ desc, subtotal });
@@ -209,10 +209,9 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
       const u = upsells[0];
       if (u.isMujeres) {
         upsellText = ` Por cierto, una de las camas está en la habitación exclusiva para mujeres — ¿hay alguna chica en el grupo?`;
-      } else if (u.bedsLeft === 1) {
-        upsellText = ` Además, en esa segunda habitación quedaría 1 cama libre — por ${u.pricePerBed} euros más la tendríais completa solo para vosotros.`;
       } else {
-        upsellText = ` En esa segunda habitación quedarían ${u.bedsLeft} camas libres — por ${u.price} euros más la tendríais completa solo para vosotros.`;
+        const fullRoomTotal = totalPrice + u.price;
+        upsellText = ` Si la queréis solo para vosotros, la habitación completa son ${fullRoomTotal} euros en total.`;
       }
     }
 
