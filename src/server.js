@@ -143,7 +143,7 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     const { rooms, totalCapacity } = await getAvailability(checkin_date, checkout_date, guests);
 
     if (!rooms || rooms.length === 0) {
-      return vapiReply(req, res, `No tenemos disponibilidad para esas fechas. Puedes consultar otras fechas en haztureserva punto a pe pe.`);
+      return vapiReply(req, res, `No tenemos disponibilidad para esas fechas. Puedes consultar otras fechas en haz tu reserva punto a pe pe.`);
     }
 
     const privateRooms = rooms.filter(r => r.soldAsWhole).sort((a, b) => a.capacityPerRoom - b.capacityPerRoom);
@@ -160,7 +160,7 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
         opts.push(`cama en habitación compartida a ${cheapShared.price} euros`);
       }
       if (opts.length === 0) return vapiReply(req, res, `No tenemos disponibilidad para esas fechas.`);
-      return vapiReply(req, res, `Para ${guests} persona${guests > 1 ? 's' : ''}: ${opts.join(', o bien ')}. Para reservar, entra en haztureserva punto a pe pe.`);
+      return vapiReply(req, res, `Para ${guests} persona${guests > 1 ? 's' : ''}: ${opts.join(', o bien ')}. Para reservar, entra en haz tu reserva punto a pe pe.`);
     }
 
     // ── Grupos (3+): combinar camas compartidas con upselling ─────────────────
@@ -201,7 +201,7 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     }
 
     if (remaining > 0) {
-      return vapiReply(req, res, `Lo siento, no hay suficiente disponibilidad para ${guests} personas en esas fechas. La capacidad máxima disponible es de ${totalCapacity} personas. Consulta otras fechas en haztureserva punto a pe pe.`);
+      return vapiReply(req, res, `Lo siento, no hay suficiente disponibilidad para ${guests} personas en esas fechas. La capacidad máxima disponible es de ${totalCapacity} personas. Consulta otras fechas en haz tu reserva punto a pe pe.`);
     }
 
     const totalPrice = combo.reduce((s, c) => s + c.subtotal, 0);
@@ -225,11 +225,11 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
       ? ` También podéis reservar la habitación con litera matrimonial entera a ${wholeMatch.price} euros la noche.`
       : '';
 
-    return vapiReply(req, res, `Para ${guests} personas: ${comboText}. Total ${totalPrice} euros la noche.${upsellText}${extraOpt} Para reservar entra en haztureserva punto a pe pe.`);
+    return vapiReply(req, res, `Para ${guests} personas: ${comboText}. Total ${totalPrice} euros la noche.${upsellText}${extraOpt} Para reservar entra en haz tu reserva punto a pe pe.`);
 
   } catch (err) {
     console.error('[get-availability] Error:', err.message);
-    return vapiReply(req, res, `No he podido consultar disponibilidad en este momento. Puedes entrar en haztureserva punto a pe pe para ver opciones.`);
+    return vapiReply(req, res, `No he podido consultar disponibilidad en este momento. Puedes entrar en haz tu reserva punto a pe pe para ver opciones.`);
   }
 });
 
