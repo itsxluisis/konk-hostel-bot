@@ -220,7 +220,7 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     }
 
     // Opción hab. privada entera si encaja exactamente (litera matrimonial para 4)
-    const wholeMatch = privateRooms.find(r => r.capacityPerRoom === guests && r.bedsAvailable > 0);
+    const wholeMatch = privateRooms.find(r => r.capacityPerRoom >= guests && r.bedsAvailable > 0);
     const extraOpt = wholeMatch
       ? ` También podéis reservar la habitación con litera matrimonial entera a ${wholeMatch.price} euros la noche.`
       : '';
