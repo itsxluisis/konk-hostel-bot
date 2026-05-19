@@ -77,6 +77,9 @@ Main entrance and rooms: digital via Vikey app (link sent at booking).
 Room 10 communal areas: WeLock keypad at hostel entrance.
 Any access issues: contact team via WhatsApp (sent with booking confirmation).
 
+Special case — guest locked out because their phone is inside the room:
+Say: "Intente acceder a su cuenta de email desde el teléfono con el que nos está llamando — ahí encontrará el enlace de acceso de Vikey. Si no lo consigue, escríbanos a reservas arroba konk hostel punto es y alguien del equipo se pondrá en contacto con usted a la mayor brevedad."
+
 ---
 
 ## RESERVATIONS
