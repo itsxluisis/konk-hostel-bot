@@ -356,6 +356,7 @@ app.post('/admin/send-call-summary', vapiAuth, (req, res) => res.json({ ok: true
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
+    version: 'deploy-test-1',
     timestamp: new Date().toISOString(),
     cloudbeds: !!process.env.CLOUDBEDS_REFRESH_TOKEN ? 'authorized' : 'pending_auth',
     telegram: !!process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'missing',
