@@ -32,11 +32,26 @@ function roomTotal(r) {
   return (r.priceTotal != null ? r.priceTotal : r.price);
 }
 
+// Etiqueta hablada y anclada del tipo de habitación (a partir del nombre de
+// Cloudbeds). Evita que el modelo invente la descripción.
+function roomLabel(name) {
+  const n = (name || '').toLowerCase();
+  if (n.includes('litera de matrimonio') || n.includes('litera matrimonio')) return 'con litera de matrimonio';
+  if (n.includes('adaptada')) return 'doble adaptada y accesible';
+  if (n.includes('independiente')) return 'doble con entrada independiente';
+  if (n.includes('doble')) return 'doble';
+  return '';
+}
+
 // Habitaciones privadas reales que alojan a todo el grupo en una sola habitación.
 function genuineOffers(privateRooms, guests, nights) {
   return privateRooms
     .filter(r => r.capacityPerRoom >= guests && r.bedsAvailable > 0 && roomTotal(r))
-    .map(r => ({ price: roomTotal(r), text: `una habitación privada para ${personasStr(guests)}, ${priceText(roomTotal(r), nights)}` }))
+    .map(r => {
+      const label = roomLabel(r.roomTypeName);
+      const desc = label ? `una habitación privada ${label}` : 'una habitación privada';
+      return { price: roomTotal(r), text: `${desc} para ${personasStr(guests)}, ${priceText(roomTotal(r), nights)}` };
+    })
     .sort((a, b) => a.price - b.price);
 }
 

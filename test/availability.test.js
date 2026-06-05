@@ -25,10 +25,10 @@ function room(over, totalPerNight, nights) {
 }
 function konk(nights) {
   return [
-    room({ roomTypeName: 'Doble', soldAsWhole: true, capacityPerRoom: 2, bedsAvailable: 2, roomsPhysical: 1 }, 60, nights),
-    room({ roomTypeName: 'Litera matrimonio', soldAsWhole: true, capacityPerRoom: 4, bedsAvailable: 4, roomsPhysical: 1 }, 154, nights),
-    room({ roomTypeName: 'Compartida 6', soldAsWhole: false, capacityPerRoom: 6, bedsAvailable: 6, roomsPhysical: 1 }, 23, nights),
-    room({ roomTypeName: 'Compartida 4', soldAsWhole: false, capacityPerRoom: 4, bedsAvailable: 4, roomsPhysical: 1 }, 30, nights),
+    room({ roomTypeName: 'Habitación Doble', soldAsWhole: true, capacityPerRoom: 2, bedsAvailable: 2, roomsPhysical: 1 }, 60, nights),
+    room({ roomTypeName: 'Habitación con litera de matrimonio 2 ó 4 pax', soldAsWhole: true, capacityPerRoom: 4, bedsAvailable: 4, roomsPhysical: 1 }, 154, nights),
+    room({ roomTypeName: 'Habitación Compartida/Privada 6', soldAsWhole: false, capacityPerRoom: 6, bedsAvailable: 6, roomsPhysical: 1 }, 23, nights),
+    room({ roomTypeName: 'Habitación Compartida/Privada 4', soldAsWhole: false, capacityPerRoom: 4, bedsAvailable: 4, roomsPhysical: 1 }, 30, nights),
   ];
 }
 const cap = konk(1).reduce((s, r) => s + r.bedsAvailable, 0);
@@ -38,10 +38,15 @@ check('privada→private', normalizePreference('privada'), ['private']);
 check('dorm6→shared', normalizePreference('dorm6'), ['shared']);
 check('vacío→any', normalizePreference(undefined), ['any']);
 
-console.log('\n1 NOCHE — 4 personas:');
+console.log('\n1 persona, 1 NOCHE (solo queda la cuádruple privada — el caso de hoy):');
 const n1 = konk(1);
+const r1solo = buildReply({ rooms: [konk(1)[1]], totalCapacity: 4, guests: 1, preference: 'private', nights: 1 });
+check('nombra la habitación (litera de matrimonio), NO inventa', r1solo, ['litera de matrimonio', '154 euros la noche']);
+console.log(`     [salida] ${r1solo}`);
+
+console.log('\n1 NOCHE — 4 personas:');
 const r1priv = buildReply({ rooms: n1, totalCapacity: cap, guests: 4, preference: 'private', nights: 1 });
-check('private: privada real (154) la noche', r1priv, ['habitación privada para 4 personas, 154 euros la noche']);
+check('private: privada real (154) la noche, con nombre', r1priv, ['litera de matrimonio', '154 euros la noche']);
 check('private: no dice "en total" en 1 noche', r1priv, [], ['en total']);
 console.log(`     [salida] ${r1priv}`);
 
@@ -50,7 +55,7 @@ const n2 = konk(2);
 // matrimonio total 2 noches = 308 (en real era 237 por tarifa dinámica; aquí 154*2)
 const r2priv = buildReply({ rooms: n2, totalCapacity: cap, guests: 4, preference: 'private', nights: 2 });
 check('private: cotiza TOTAL de 2 noches, no promedio', r2priv, ['en total por 2 noches']);
-check('private: incluye la privada real (308 total)', r2priv, ['habitación privada para 4 personas, 308 euros en total por 2 noches']);
+check('private: incluye la privada real (308 total) con nombre', r2priv, ['habitación privada con litera de matrimonio para 4 personas, 308 euros en total por 2 noches']);
 console.log(`     [salida] ${r2priv}`);
 
 const r2shared = buildReply({ rooms: n2, totalCapacity: cap, guests: 4, preference: 'shared', nights: 2 });
