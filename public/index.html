@@ -808,48 +808,13 @@ function render() {
 }
 
 // ── INIT ───────────────────────────────────────────────────────────────────────
-var lastCallCheck = localStorage.getItem('klastcall') || new Date(Date.now() - 10*60*1000).toISOString();
-
-function checkNewCalls() {
-  if (!sess) return;
-  fetch(VA + '/call?limit=20', {
-    headers: { 'Authorization': 'Bearer ' + sess.vk }
-  }).then(function(r) { return r.json(); })
-  .then(function(calls) {
-    var newCalls = (calls || []).filter(function(c) {
-      return c.status === 'ended' && c.endedAt && new Date(c.endedAt) > new Date(lastCallCheck);
-    });
-    newCalls.forEach(function(c) {
-      var duration = c.duration ? Math.floor(c.duration/60) + 'm ' + (Math.round(c.duration)%60) + 's' : '—';
-      var cost = c.cost ? c.cost.toFixed(3) : null;
-      var transcript = (c.transcript || '').toLowerCase();
-      var tipo = transcript.indexOf('no puedo entrar') !== -1 ? 'Emergencia acceso' :
-                 transcript.indexOf('disponibilidad') !== -1 || transcript.indexOf('reservar') !== -1 ? 'Consulta reserva' :
-                 transcript.indexOf('pelea') !== -1 || transcript.indexOf('emergencia') !== -1 ? 'URGENCIA' : 'Info general';
-      fetch(WH + '/admin/send-call-summary', {
-        method: 'POST',
-        headers: { 'x-vapi-secret': sess.ws, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: (c.customer && c.customer.number) || 'test',
-          duration: duration,
-          cost: cost,
-          summary: c.summary || (c.analysis && c.analysis.summary) || null,
-          tipo: tipo
-        })
-      }).catch(function() {});
-    });
-    if (newCalls.length > 0) {
-      lastCallCheck = new Date().toISOString();
-      localStorage.setItem('klastcall', lastCallCheck);
-    }
-  }).catch(function() {});
-}
+// El resumen de cada llamada se envía a Telegram server-side desde el
+// end-of-call-report de Vapi (ver src/server.js). El panel solo visualiza.
 
 function init() {
   loadUrgs();
   refreshStatus();
   setInterval(refreshStatus, 30000);
-  setInterval(checkNewCalls, 2 * 60 * 1000);
   render();
 }
 </script>

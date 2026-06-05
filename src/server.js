@@ -350,9 +350,6 @@ app.get('/admin/reservations-today', vapiAuth, async (req, res) => {
   }
 });
 
-// ─── ADMIN: endpoint mantenido por compatibilidad con el panel, ya no envía Telegram ──
-app.post('/admin/send-call-summary', vapiAuth, (req, res) => res.json({ ok: true }));
-
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
