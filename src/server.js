@@ -6,6 +6,7 @@ require('dotenv').config();
 const express = require('express');
 const { exchangeCode, getAvailability, getAuthUrl, getToken } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
+const { buildReply } = require('./availability');
 
 const path = require('path');
 const app = express();
@@ -117,7 +118,8 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   const args = getToolArgs(req);
   const checkin_date = args.checkin_date;
   const checkout_date = args.checkout_date;
-  const guests = args.guests || 1;
+  const guests = parseInt(args.guests) || 1;
+  const preference = args.preference || args.room_type || 'any';
 
   if (!checkin_date || !checkout_date) {
     return vapiReply(req, res, 'Necesito las fechas de entrada y salida para consultar disponibilidad.');
@@ -135,98 +137,13 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     return vapiReply(req, res, 'Lo siento, las reservas para esta noche ya han cerrado. El plazo límite son las diez y media de la noche. ¿Te consulto disponibilidad para mañana u otra fecha?');
   }
 
-  console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} personas)`);
-
-  const bookingUrl = `https://www.booking.com/hotel/es/konk-hostel.es.html?checkin=${checkin_date}&checkout=${checkout_date}&group_adults=${guests}`;
+  console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} pax, pref=${preference})`);
 
   try {
     const { rooms, totalCapacity } = await getAvailability(checkin_date, checkout_date, guests);
-
-    if (!rooms || rooms.length === 0) {
-      return vapiReply(req, res, `No tenemos disponibilidad para esas fechas. Puedes consultar otras fechas en haz tu reserva punto a pe pe.`);
-    }
-
-    const privateRooms = rooms.filter(r => r.soldAsWhole).sort((a, b) => a.capacityPerRoom - b.capacityPerRoom);
-    const sharedRooms = rooms.filter(r => !r.soldAsWhole).sort((a, b) => b.capacityPerRoom - a.capacityPerRoom);
-
-    // ── 1-2 personas ──────────────────────────────────────────────────────────
-    if (guests <= 2) {
-      const opts = [];
-      privateRooms.filter(r => r.bedsAvailable > 0).slice(0, 2).forEach(r => {
-        opts.push(`${r.roomTypeName} a ${r.price} euros la noche`);
-      });
-      const cheapShared = sharedRooms[sharedRooms.length - 1];
-      if (cheapShared && opts.length < 2) {
-        opts.push(`cama en habitación compartida a ${cheapShared.price} euros`);
-      }
-      if (opts.length === 0) return vapiReply(req, res, `No tenemos disponibilidad para esas fechas.`);
-      return vapiReply(req, res, `Para ${guests} persona${guests > 1 ? 's' : ''}: ${opts.join(', o bien ')}. Para reservar, entra en haz tu reserva punto a pe pe.`);
-    }
-
-    // ── Grupos (3+): combinar camas compartidas con upselling ─────────────────
-    let remaining = guests;
-    const combo = [];
-    const upsells = [];
-
-    for (const r of sharedRooms) {
-      if (remaining <= 0) break;
-      if (r.bedsAvailable <= 0) continue;
-
-      const cap = r.capacityPerRoom;
-      const bedsToUse = Math.min(remaining, r.bedsAvailable);
-      const fullRooms = Math.floor(bedsToUse / cap);
-      const extraBeds = bedsToUse % cap;
-      const subtotal = r.price * bedsToUse;
-
-      // Upsell: camas libres en habitación parcialmente ocupada
-      if (extraBeds > 0) {
-        const bedsLeftInRoom = cap - extraBeds;
-        const isMujeres = r.roomTypeName.toLowerCase().includes('mujer');
-        upsells.push({ bedsLeft: bedsLeftInRoom, price: r.price * bedsLeftInRoom, pricePerBed: r.price, isMujeres });
-      }
-
-      const nHab = (n) => n === 1 ? '1 habitación' : `${n} habitaciones`;
-
-      let desc;
-      if (extraBeds === 0) {
-        desc = `${nHab(fullRooms)} compartida${fullRooms > 1 ? 's' : ''} a ${r.price} euros por cama, ${subtotal} euros en total`;
-      } else if (fullRooms === 0) {
-        desc = `camas en habitación compartida a ${r.price} euros por cama, ${subtotal} euros en total`;
-      } else {
-        desc = `${nHab(fullRooms)} completa${fullRooms > 1 ? 's' : ''} más camas en otra habitación compartida, todo a ${r.price} euros por cama, ${subtotal} euros en total`;
-      }
-
-      combo.push({ desc, subtotal });
-      remaining -= bedsToUse;
-    }
-
-    if (remaining > 0) {
-      return vapiReply(req, res, `Lo siento, no hay suficiente disponibilidad para ${guests} personas en esas fechas. La capacidad máxima disponible es de ${totalCapacity} personas. Consulta otras fechas en haz tu reserva punto a pe pe.`);
-    }
-
-    const totalPrice = combo.reduce((s, c) => s + c.subtotal, 0);
-    const comboText = combo.map(c => c.desc).join(', más ');
-
-    // Upsell inteligente
-    let upsellText = '';
-    if (upsells.length > 0) {
-      const u = upsells[0];
-      if (u.isMujeres) {
-        upsellText = ` Por cierto, una de las camas está en la habitación exclusiva para mujeres — ¿hay alguna chica en el grupo?`;
-      } else {
-        const fullRoomTotal = totalPrice + u.price;
-        upsellText = ` Si la queréis solo para vosotros, la habitación completa son ${fullRoomTotal} euros en total.`;
-      }
-    }
-
-    // Opción hab. privada entera si encaja exactamente (litera matrimonial para 4)
-    const wholeMatch = privateRooms.find(r => r.capacityPerRoom >= guests && r.bedsAvailable > 0);
-    const extraOpt = wholeMatch
-      ? ` También podéis reservar la habitación con litera matrimonial entera a ${wholeMatch.price} euros la noche.`
-      : '';
-
-    return vapiReply(req, res, `Para ${guests} personas: ${comboText}. Total ${totalPrice} euros la noche.${upsellText}${extraOpt} Para reservar entra en haz tu reserva punto a pe pe.`);
-
+    const reply = buildReply({ rooms, totalCapacity, guests, preference });
+    console.log(`[get-availability] reply: ${reply}`);
+    return vapiReply(req, res, reply);
   } catch (err) {
     console.error('[get-availability] Error:', err.message);
     return vapiReply(req, res, `No he podido consultar disponibilidad en este momento. Puedes entrar en haz tu reserva punto a pe pe para ver opciones.`);
