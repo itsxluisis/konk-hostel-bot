@@ -592,7 +592,7 @@ function renderAvailability() {
   var c = document.getElementById('content');
   var t = new Date().toISOString().split('T')[0];
   var t2 = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-  c.innerHTML = '<div class="card" style="margin-bottom:10px"><div class="ctitle">Test de disponibilidad</div><div class="row"><div class="field"><label>Check-in</label><input type="date" id="avi" value="' + t + '"></div><div class="field"><label>Check-out</label><input type="date" id="avo" value="' + t2 + '"></div><div class="field" style="max-width:90px"><label>Personas</label><input type="number" id="avg" value="2" min="1" max="30"></div></div><button class="btn btn-acc" id="avbtn">Consultar</button><div class="avres" id="avres"></div></div>'
+  c.innerHTML = '<div class="card" style="margin-bottom:10px"><div class="ctitle">Test de disponibilidad</div><div class="row"><div class="field"><label>Check-in</label><input type="date" id="avi" value="' + t + '"></div><div class="field"><label>Check-out</label><input type="date" id="avo" value="' + t2 + '"></div><div class="field" style="max-width:90px"><label>Personas</label><input type="number" id="avg" value="2" min="1" max="30"></div><div class="field" style="max-width:130px"><label>Preferencia</label><select id="avp"><option value="any">Cualquiera</option><option value="private">Privada</option><option value="shared">Compartida</option></select></div></div><button class="btn btn-acc" id="avbtn">Consultar</button><div class="avres" id="avres"></div></div>'
     + '<div class="card"><div class="chd"><span class="ctitle">Tipos de habitación (Cloudbeds)</span><button class="btn btn-sm" id="rtbtn">Volcar</button></div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-bottom:8px">Diagnóstico: muestra isPrivate, maxGuests y nombre de cada tipo, tal como los lee la lógica de disponibilidad.</div><div class="avres" id="rtres"></div></div>';
   document.getElementById('avbtn').addEventListener('click', testAvail);
   document.getElementById('rtbtn').addEventListener('click', roomTypesDump);
@@ -604,7 +604,8 @@ function testAvail() {
   hookPost('/vapi/get-availability', {
     checkin_date: document.getElementById('avi').value,
     checkout_date: document.getElementById('avo').value,
-    guests: parseInt(document.getElementById('avg').value)
+    guests: parseInt(document.getElementById('avg').value),
+    preference: document.getElementById('avp').value
   }).then(function(d) { r.textContent = d.result || JSON.stringify(d, null, 2); })
     .catch(function(e) { r.textContent = 'Error: ' + e.message; });
 }
