@@ -1,0 +1,29 @@
+name: Verify assistant config
+
+# Lee el assistant y muestra lo importante para verificar (prompt, voz, modelo).
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mostrar config clave del assistant
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          A=$(curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY")
+          echo "=== MODELO (LLM) ==="
+          echo "$A" | jq '{provider: .model.provider, model: .model.model}'
+          echo "=== VOZ ==="
+          echo "$A" | jq '.voice | {provider, voiceId, model, pronunciationDictionaryLocators}'
+          echo "=== firstMessage ==="
+          echo "$A" | jq -r '.firstMessage'
+          echo "=== PROMPT — marcadores de versión ==="
+          C=$(echo "$A" | jq -r '.model.messages[0].content')
+          printf '%s\n' "$C" | grep -n "pasado mañana" && echo "  [✓ fecha 'pasado mañana' presente]" || echo "  [✗ FALTA 'pasado mañana']"
+          printf '%s\n' "$C" | grep -n "en total por" && echo "  [✓ regla precio 'en total' presente]" || echo "  [✗ FALTA regla 'en total']"
+          printf '%s\n' "$C" | grep -n "cuarenta y cinco euros la noche" && echo "  [✗ ejemplo de precio VIEJO presente]" || echo "  [✓ sin ejemplo viejo]"
+          printf '%s\n' "$C" | grep -n "pronunciation dictionary" && echo "  [✓ nota de pronunciación presente]" || echo "  [✗ FALTA nota de pronunciación]"
