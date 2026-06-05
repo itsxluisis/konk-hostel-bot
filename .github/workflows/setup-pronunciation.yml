@@ -1,0 +1,77 @@
+name: Setup pronunciation dictionary (ElevenLabs)
+
+# Crea un diccionario de pronunciación en ElevenLabs vía la API de Vapi
+# (Konk → IPA, haztureserva.app → alias) y lo engancha a la voz del assistant.
+# Ejecución manual: Actions → este workflow → Run workflow.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Crear diccionario y enlazarlo al assistant
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+
+          # 1) Crear el diccionario de pronunciación
+          BODY=$(jq -n '{
+            name: "Konk Hostel",
+            rules: [
+              { stringToReplace: "Konk", type: "phoneme", phoneme: "koŋk", alphabet: "ipa" },
+              { stringToReplace: "haztureserva.app", type: "alias", alias: "haz tu reserva punto app" }
+            ]
+          }')
+          echo "→ Creando diccionario..."
+          DICT=$(curl -s -X POST "https://api.vapi.ai/provider/11labs/pronunciation-dictionary" \
+            -H "Authorization: Bearer $VAPI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          echo "$DICT" | jq '{pronunciationDictionaryId, versionId, name}' || echo "$DICT"
+          DID=$(echo "$DICT" | jq -r '.pronunciationDictionaryId // empty')
+          VID=$(echo "$DICT" | jq -r '.versionId // empty')
+          if [ -z "$DID" ] || [ -z "$VID" ]; then
+            echo "❌ Error creando el diccionario:"; echo "$DICT"; exit 1
+          fi
+          echo "✓ Diccionario creado: $DID / $VID"
+
+          # 2) Leer la voz actual del assistant
+          echo "→ Leyendo voz actual del assistant..."
+          ASST=$(curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY")
+          PROVIDER=$(echo "$ASST" | jq -r '.voice.provider // empty')
+          echo "Voz actual:"; echo "$ASST" | jq '.voice'
+          if [ "$PROVIDER" != "11labs" ]; then
+            echo "❌ El proveedor de voz es '$PROVIDER', no '11labs'. Aborto para no romper nada."; exit 1
+          fi
+
+          # 3) Construir la nueva voz: conservar provider+voiceId+ajustes, fijar modelo
+          #    eleven_flash_v2 (soporta IPA) y añadir el localizador del diccionario.
+          NEWVOICE=$(echo "$ASST" | jq --arg did "$DID" --arg vid "$VID" '
+            {
+              provider: .voice.provider,
+              voiceId: .voice.voiceId,
+              model: "eleven_flash_v2",
+              pronunciationDictionaryLocators: [ { pronunciationDictionaryId: $did, versionId: $vid } ]
+            }
+            + ( .voice | { stability, similarityBoost, style, useSpeakerBoost } | with_entries(select(.value != null)) )
+          ')
+          PAYLOAD=$(jq -n --argjson v "$NEWVOICE" '{voice: $v}')
+
+          # 4) PATCH del assistant
+          echo "→ Enlazando diccionario a la voz..."
+          RESP=$(curl -s -w "\nHTTP:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/$ASSISTANT_ID" \
+            -H "Authorization: Bearer $VAPI_API_KEY" -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          echo "$RESP" | sed 's/Bearer [A-Za-z0-9._-]*/Bearer ***/g'
+          CODE=$(echo "$RESP" | grep -o 'HTTP:[0-9]*' | cut -d: -f2)
+          if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
+            echo "❌ PATCH falló (HTTP $CODE)"; exit 1
+          fi
+
+          echo "→ Voz final:"
+          curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY" | jq '.voice'
+          echo "✅ Listo: 'Konk' (IPA) y 'haztureserva.app' (alias) configurados."
