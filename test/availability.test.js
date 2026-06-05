@@ -41,13 +41,13 @@ check('vacío→any', normalizePreference(undefined), ['any']);
 console.log('\n1 persona, 1 NOCHE (solo queda la cuádruple privada — el caso de hoy):');
 const n1 = konk(1);
 const r1solo = buildReply({ rooms: [konk(1)[1]], totalCapacity: 4, guests: 1, preference: 'private', nights: 1 });
-check('nombra la habitación (litera de matrimonio), NO inventa', r1solo, ['litera de matrimonio', '154 euros la noche']);
+check('nombra la habitación (litera de matrimonio), NO inventa', r1solo, ['litera de matrimonio', '154 euros en total por 1 noche']);
 console.log(`     [salida] ${r1solo}`);
 
 console.log('\n1 NOCHE — 4 personas:');
 const r1priv = buildReply({ rooms: n1, totalCapacity: cap, guests: 4, preference: 'private', nights: 1 });
-check('private: privada real (154) la noche, con nombre', r1priv, ['litera de matrimonio', '154 euros la noche']);
-check('private: no dice "en total" en 1 noche', r1priv, [], ['en total']);
+check('private: privada real (154) en total por 1 noche, con nombre', r1priv, ['litera de matrimonio', '154 euros en total por 1 noche']);
+check('private: NUNCA dice "la noche" suelto', r1priv, [], ['euros la noche']);
 console.log(`     [salida] ${r1priv}`);
 
 console.log('\n2 NOCHES — el caso de la llamada (sáb→lun, 4 pax):');

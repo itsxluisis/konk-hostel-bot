@@ -210,7 +210,7 @@ app.post('/vapi/get-current-date', vapiAuth, (req, res) => {
     const d = new Date(murcia);
     d.setDate(d.getDate() + i);
     const iso = d.toISOString().split('T')[0];
-    const label = i === 0 ? 'HOY' : i === -1 ? 'ayer' : i === 1 ? 'mañana' : i < 0 ? `hace ${Math.abs(i)} días` : null;
+    const label = i === 0 ? 'HOY' : i === -1 ? 'ayer' : i === 1 ? 'mañana' : i === 2 ? 'pasado mañana' : i < 0 ? `hace ${Math.abs(i)} días` : `en ${i} días`;
     const entry = `${dias[d.getDay()]} ${d.getDate()} de ${meses[d.getMonth()]} = ${iso}${label ? ` (${label})` : ''}`;
     nextDays.push(entry);
   }

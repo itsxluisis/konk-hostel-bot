@@ -21,10 +21,11 @@ function personasStr(guests) {
   return guests === 1 ? '1 persona' : `${guests} personas`;
 }
 
-// Frase de precio: total de la estancia, mencionando noches si son varias.
+// Frase de precio: SIEMPRE el total de la estancia, nunca "por noche".
+// Así el modelo no puede convertirlo en "X euros la noche" (bug recurrente).
 function priceText(total, nights) {
-  if (!nights || nights <= 1) return `${total} euros la noche`;
-  return `${total} euros en total por ${nights} noches`;
+  const n = nights && nights > 0 ? nights : 1;
+  return `${total} euros en total por ${n} ${n === 1 ? 'noche' : 'noches'}`;
 }
 
 // Precio total de la estancia para una habitación (fallback a price si hiciera falta).
