@@ -240,6 +240,20 @@ app.get('/admin/room-types', async (req, res) => {
   }
 });
 
+// ─── DIAGNÓSTICO: precios crudos de Cloudbeds para un rango ──────────────────
+app.get('/admin/availability-debug', vapiAuth, async (req, res) => {
+  const { checkin, checkout } = req.query;
+  if (!checkin || !checkout) return res.status(400).json({ error: 'Faltan checkin/checkout' });
+  try {
+    const { getAvailabilityDebug } = require('./cloudbeds');
+    const data = await getAvailabilityDebug(checkin, checkout);
+    res.json(data);
+  } catch (err) {
+    console.error('[availability-debug]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── ADMIN: login ─────────────────────────────────────────────────────────────
 app.post('/admin/login', (req, res) => {
   const { user, pass } = req.body || {};

@@ -206,6 +206,26 @@ async function getAvailability(checkinDate, checkoutDate, guests = 1) {
   }
 }
 
+// ─── Diagnóstico: devuelve el roomRate CRUDO de Cloudbeds + el computado ──────
+// Sirve para entender la semántica del precio (total estancia vs por noche).
+async function getAvailabilityDebug(checkinDate, checkoutDate) {
+  const d1 = new Date(checkinDate);
+  const d2 = new Date(checkoutDate);
+  const nights = Math.max(1, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)));
+
+  const availData = await api('GET', '/getAvailableRoomTypes', { startDate: checkinDate, endDate: checkoutDate });
+  const propertyData = availData.data?.[0];
+  const raw = (propertyData?.propertyRooms || []).map(r => ({
+    roomTypeName: r.roomTypeName,
+    roomTypeID: r.roomTypeID,
+    roomsAvailable: r.roomsAvailable,
+    maxGuests: r.maxGuests,
+    roomRate: r.roomRate,
+    roomRate_div_nights: r.roomRate ? Math.round(parseFloat(r.roomRate) / nights) : null,
+  }));
+  return { nights, currency: propertyData?.propertyCurrency?.currencyCode || 'EUR', raw };
+}
+
 // ─── URL de autorización OAuth (para el primer login) ────────────────────────
 function getAuthUrl() {
   const params = new URLSearchParams({
@@ -238,4 +258,4 @@ async function getReservationsByDate(date) {
   }
 }
 
-module.exports = { exchangeCode, getAvailability, getAuthUrl, getToken, getReservationsByDate };
+module.exports = { exchangeCode, getAvailability, getAvailabilityDebug, getAuthUrl, getToken, getReservationsByDate };
