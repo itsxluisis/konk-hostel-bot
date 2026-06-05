@@ -1,6 +1,10 @@
 // src/availability.js
 // Construye la respuesta hablada de disponibilidad para el bot de voz.
 // Función PURA (sin red, sin Cloudbeds) para poder testearla aislada.
+//
+// IMPORTANTE: siempre se cotiza el TOTAL de la estancia (no el promedio por
+// noche). Cloudbeds da roomRate como total del rango; cotizar por noche
+// infra-cotizaba en estancias de varias noches y no cuadraba con la web.
 'use strict';
 
 const BOOK = 'Para reservar, busca haz tu reserva punto a pe pe.';
@@ -17,60 +21,67 @@ function personasStr(guests) {
   return guests === 1 ? '1 persona' : `${guests} personas`;
 }
 
+// Frase de precio: total de la estancia, mencionando noches si son varias.
+function priceText(total, nights) {
+  if (!nights || nights <= 1) return `${total} euros la noche`;
+  return `${total} euros en total por ${nights} noches`;
+}
+
+// Precio total de la estancia para una habitación (fallback a price si hiciera falta).
+function roomTotal(r) {
+  return (r.priceTotal != null ? r.priceTotal : r.price);
+}
+
 // Habitaciones privadas reales que alojan a todo el grupo en una sola habitación.
-function genuineOffers(privateRooms, guests) {
+function genuineOffers(privateRooms, guests, nights) {
   return privateRooms
-    .filter(r => r.capacityPerRoom >= guests && r.bedsAvailable > 0 && r.price)
-    .map(r => ({ price: r.price, text: `una habitación privada para ${personasStr(guests)} a ${r.price} euros la noche` }))
+    .filter(r => r.capacityPerRoom >= guests && r.bedsAvailable > 0 && roomTotal(r))
+    .map(r => ({ price: roomTotal(r), text: `una habitación privada para ${personasStr(guests)}, ${priceText(roomTotal(r), nights)}` }))
     .sort((a, b) => a.price - b.price);
 }
 
 // Para grupos (3+): reservar un dormitorio compartido entero solo para ellos.
-function wholeDormOffers(sharedRooms, guests) {
+function wholeDormOffers(sharedRooms, guests, nights) {
   if (guests < 3) return [];
   return sharedRooms
-    .filter(r => r.capacityPerRoom >= guests && r.roomsPhysical >= 1 && r.price)
-    .map(r => ({ price: r.price * r.capacityPerRoom, text: `un dormitorio entero solo para vosotros, ${r.capacityPerRoom} camas, a ${r.price * r.capacityPerRoom} euros la noche` }))
+    .filter(r => r.capacityPerRoom >= guests && r.roomsPhysical >= 1 && roomTotal(r))
+    .map(r => {
+      const total = roomTotal(r) * r.capacityPerRoom;
+      return { price: total, text: `un dormitorio entero solo para vosotros, ${r.capacityPerRoom} camas, ${priceText(total, nights)}` };
+    })
     .sort((a, b) => a.price - b.price);
 }
 
 // Opción compartida: camas sueltas, combinando dormitorios para grupos.
-function sharedReply(sharedRooms, guests, totalCapacity) {
-  const withBeds = sharedRooms.filter(r => r.bedsAvailable > 0 && r.price);
+function sharedReply(sharedRooms, guests, totalCapacity, nights) {
+  const withBeds = sharedRooms.filter(r => r.bedsAvailable > 0 && roomTotal(r));
   if (withBeds.length === 0) return { ok: false, text: '' };
 
   if (guests <= 2) {
-    const cheap = [...withBeds].sort((a, b) => a.price - b.price)[0];
+    const cheap = [...withBeds].sort((a, b) => roomTotal(a) - roomTotal(b))[0];
     const camas = guests === 1 ? 'una cama' : `${guests} camas`;
-    const total = cheap.price * guests;
-    const totalStr = guests > 1 ? `, ${total} euros en total` : '';
-    return { ok: true, text: `${camas} en habitación compartida a ${cheap.price} euros por cama${totalStr}` };
+    const total = roomTotal(cheap) * guests;
+    return { ok: true, text: `${camas} en habitación compartida, ${priceText(total, nights)}` };
   }
 
   // Grupos: llenar desde los dormitorios más grandes
   const sorted = [...withBeds].sort((a, b) => b.capacityPerRoom - a.capacityPerRoom);
   let remaining = guests;
-  const used = [];
+  let total = 0;
   for (const r of sorted) {
     if (remaining <= 0) break;
     const beds = Math.min(remaining, r.bedsAvailable);
-    used.push({ price: r.price, beds });
+    total += roomTotal(r) * beds;
     remaining -= beds;
   }
   if (remaining > 0) {
     return { ok: false, text: `no hay suficientes camas en compartida para ${personasStr(guests)} en esas fechas (capacidad máxima ${totalCapacity})` };
   }
-
-  const total = used.reduce((s, u) => s + u.price * u.beds, 0);
-  const prices = [...new Set(used.map(u => u.price))];
-  if (prices.length === 1) {
-    return { ok: true, text: `${guests} camas en habitación compartida a ${prices[0]} euros por cama, ${total} euros en total` };
-  }
-  return { ok: true, text: `${guests} camas repartidas en habitaciones compartidas, ${total} euros en total la noche` };
+  return { ok: true, text: `${guests} camas en habitación compartida, ${priceText(total, nights)}` };
 }
 
 // ── Entrada principal ──────────────────────────────────────────────────────────
-function buildReply({ rooms, totalCapacity = 0, guests, preference = 'any' }) {
+function buildReply({ rooms, totalCapacity = 0, guests, preference = 'any', nights = 1 }) {
   if (!rooms || rooms.length === 0) {
     return `No tenemos disponibilidad para esas fechas. Puedes consultar otras fechas en haz tu reserva punto a pe pe.`;
   }
@@ -80,12 +91,11 @@ function buildReply({ rooms, totalCapacity = 0, guests, preference = 'any' }) {
   const privateRooms = rooms.filter(r => r.soldAsWhole);
   const sharedRooms = rooms.filter(r => !r.soldAsWhole);
 
-  const genuine = genuineOffers(privateRooms, guests);
-  const wholeDorm = wholeDormOffers(sharedRooms, guests);
-  const shared = sharedReply(sharedRooms, guests, totalCapacity);
+  const genuine = genuineOffers(privateRooms, guests, nights);
+  const wholeDorm = wholeDormOffers(sharedRooms, guests, nights);
+  const shared = sharedReply(sharedRooms, guests, totalCapacity, nights);
 
   if (pref === 'private') {
-    // Una privada real + (para grupos) un dormitorio entero como alternativa.
     const offers = [];
     if (genuine[0]) offers.push(genuine[0]);
     if (wholeDorm[0]) offers.push(wholeDorm[0]);

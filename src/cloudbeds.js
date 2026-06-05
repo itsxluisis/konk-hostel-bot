@@ -169,6 +169,9 @@ async function getAvailability(checkinDate, checkoutDate, guests = 1) {
       });
 
     const rooms = Array.from(typeMap.values()).map(r => {
+      // Cloudbeds devuelve roomRate como TOTAL de la estancia (privada: por habitación;
+      // compartida: por cama). priceTotal = total estancia; price = promedio por noche.
+      const priceTotal = r.price ? Math.round(r.price) : null;
       const pricePerNight = r.price ? Math.round(r.price / nights) : null;
       // Camas totales disponibles:
       // - Privada: unitsAvail = habitaciones disponibles → camas = unitsAvail * capPerRoom
@@ -185,16 +188,17 @@ async function getAvailability(checkinDate, checkoutDate, guests = 1) {
         bedsAvailable,
         roomsPhysical,
         price: pricePerNight,
+        priceTotal,
         currency: r.currency,
       };
     });
 
     const totalCapacity = rooms.reduce((sum, r) => sum + r.bedsAvailable, 0);
 
-    console.log(`[Cloudbeds] ${rooms.length} tipos, capacidad total: ${totalCapacity}`);
-    rooms.forEach(r => console.log(`  - ${r.roomTypeName}: soldAsWhole=${r.soldAsWhole}, cap=${r.capacityPerRoom}, beds=${r.bedsAvailable}, rooms=${r.roomsPhysical}, price=${r.price}`));
+    console.log(`[Cloudbeds] ${rooms.length} tipos, ${nights} noches, capacidad total: ${totalCapacity}`);
+    rooms.forEach(r => console.log(`  - ${r.roomTypeName}: soldAsWhole=${r.soldAsWhole}, cap=${r.capacityPerRoom}, beds=${r.bedsAvailable}, rooms=${r.roomsPhysical}, total=${r.priceTotal}, /noche=${r.price}`));
 
-    return { rooms, totalCapacity, guests };
+    return { rooms, totalCapacity, guests, nights };
 
   } catch (err) {
     console.error('[Cloudbeds] getAvailability error:', err.message);
