@@ -22,7 +22,7 @@ jobs:
           BODY=$(jq -n '{
             name: "Konk Hostel",
             rules: [
-              { stringToReplace: "Konk", type: "phoneme", phoneme: "koŋk", alphabet: "ipa" },
+              { stringToReplace: "Konk", type: "phoneme", phoneme: "/koŋk/", alphabet: "ipa" },
               { stringToReplace: "haztureserva.app", type: "alias", alias: "haz tu reserva punto app" }
             ]
           }')
