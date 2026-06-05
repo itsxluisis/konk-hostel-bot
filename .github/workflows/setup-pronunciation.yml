@@ -31,9 +31,9 @@ jobs:
             -H "Authorization: Bearer $VAPI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$BODY")
-          echo "$DICT" | jq '{pronunciationDictionaryId, versionId, name}' || echo "$DICT"
-          DID=$(echo "$DICT" | jq -r '.pronunciationDictionaryId // empty')
-          VID=$(echo "$DICT" | jq -r '.versionId // empty')
+          echo "$DICT" | jq '{id, resourceId, resource: {pronunciationDictionaryId: .resource.pronunciationDictionaryId, versionId: .resource.versionId}}' || echo "$DICT"
+          DID=$(echo "$DICT" | jq -r '.pronunciationDictionaryId // .resource.pronunciationDictionaryId // .resourceId // empty')
+          VID=$(echo "$DICT" | jq -r '.versionId // .resource.versionId // empty')
           if [ -z "$DID" ] || [ -z "$VID" ]; then
             echo "❌ Error creando el diccionario:"; echo "$DICT"; exit 1
           fi
