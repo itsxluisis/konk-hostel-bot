@@ -1,0 +1,45 @@
+name: Update post-call analysis (Telegram schema)
+
+# Reescribe el structuredDataPlan de Vapi para devolver campos esquemáticos
+# (llamar / motivo / descripcion) en español conciso, y desactiva el
+# summaryPlan verboso. El servidor construye el mensaje de Telegram con esto.
+on: { workflow_dispatch: {} }
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PATCH analysisPlan
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          AP=$(jq -n '{
+            summaryPlan: { enabled: false },
+            structuredDataPlan: {
+              enabled: true,
+              schema: {
+                type: "object",
+                required: ["llamar","motivo","descripcion"],
+                properties: {
+                  llamar: { type: "boolean", description: "true SOLO si el equipo deberia devolver la llamada" },
+                  motivo: { type: "string", description: "Motivo de la llamada en 1 a 4 palabras, p.ej. Disponibilidad y precios, Acceso Vikey, Incidencia, Cancelacion, Info general" },
+                  descripcion: { type: "string", description: "Una frase breve y objetiva de que pidio y si se resolvio. Sin adjetivos emocionales." }
+                }
+              },
+              messages: [
+                { role: "system", content: "Analiza esta llamada a un hostel y responde SOLO con el JSON del esquema, en espanol, conciso y objetivo. llamar = true SOLO si el equipo deberia devolver la llamada: incidencia o problema sin resolver, no pudo completar algo importante, u oportunidad clara de venta que merece seguimiento (grupo grande, estancia larga, pregunto precio varias veces sin reservar). Si fue una consulta informativa ya resuelta o dijo que reservaria online: false. motivo = el motivo de la llamada en 1 a 4 palabras. descripcion = UNA frase breve y objetiva de que pidio y si se resolvio; nada de adjetivos emocionales tipo frustrado salvo que sea esencial." },
+                { role: "user", content: "Transcripcion:\n\n{{transcript}}\n\nMotivo de fin de la llamada: {{endedReason}}" }
+              ]
+            }
+          }')
+          RESP=$(curl -s -w "\nHTTP:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/$ASSISTANT_ID" \
+            -H "Authorization: Bearer $VAPI_API_KEY" -H "Content-Type: application/json" \
+            -d "$(jq -n --argjson ap "$AP" '{analysisPlan: $ap}')")
+          CODE=$(echo "$RESP" | grep -o 'HTTP:[0-9]*' | cut -d: -f2)
+          [ "$CODE" = "200" ] || { echo "❌ PATCH falló (HTTP $CODE)"; echo "$RESP"; exit 1; }
+          echo "analysisPlan DESPUÉS:"
+          curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY" \
+            | jq '{summary_enabled: .analysisPlan.summaryPlan.enabled, sd_enabled: .analysisPlan.structuredDataPlan.enabled, sd_required: .analysisPlan.structuredDataPlan.schema.required}'
+          echo "✅ Análisis actualizado: llamar/motivo/descripcion, summary off."
