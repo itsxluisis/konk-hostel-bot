@@ -1,0 +1,34 @@
+name: Remove pronunciation dictionary from voice
+
+# Desengancha el diccionario de pronunciación de la voz del assistant,
+# conservando voiceId y modelo de voz actuales. Soluciona
+# pipeline-error-eleven-labs-voice-failed cuando el modelo de voz no es
+# compatible con reglas IPA/phoneme (p.ej. eleven_turbo_v2_5).
+on: { workflow_dispatch: {} }
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Quitar pronunciationDictionaryLocators
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          A=$(curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY")
+          echo "Voz ANTES:"; echo "$A" | jq '.voice'
+          NV=$(echo "$A" | jq '{
+            provider: .voice.provider,
+            voiceId: .voice.voiceId,
+            model: .voice.model,
+            pronunciationDictionaryLocators: []
+          } + ( .voice | { stability, similarityBoost, style, useSpeakerBoost } | with_entries(select(.value != null)) )')
+          RESP=$(curl -s -w "\nHTTP:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/$ASSISTANT_ID" \
+            -H "Authorization: Bearer $VAPI_API_KEY" -H "Content-Type: application/json" \
+            -d "$(jq -n --argjson v "$NV" '{voice: $v}')")
+          CODE=$(echo "$RESP" | grep -o 'HTTP:[0-9]*' | cut -d: -f2)
+          [ "$CODE" = "200" ] || { echo "❌ PATCH falló (HTTP $CODE)"; echo "$RESP"; exit 1; }
+          echo "Voz DESPUÉS:"
+          curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY" | jq '.voice'
+          echo "✅ Diccionario desenganchado. La voz ya no depende de un modelo compatible con IPA."
