@@ -1,0 +1,54 @@
+name: Vapi cost report
+
+# Saca el desglose real de coste de las últimas llamadas (por componente,
+# duración y motivo de fin) para ver dónde se va el dinero.
+on: { workflow_dispatch: {} }
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Informe de costes
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+        run: |
+          set -euo pipefail
+          C=$(curl -s "https://api.vapi.ai/call?limit=100" -H "Authorization: Bearer $VAPI_API_KEY")
+          N=$(echo "$C" | jq 'length')
+          echo "=== Llamadas analizadas: $N ==="
+          echo ""
+          echo "=== TOTAL ==="
+          echo "$C" | jq '
+            def secs(a;b): (b|sub("\\.[0-9]+Z$";"Z")|fromdateiso8601) - (a|sub("\\.[0-9]+Z$";"Z")|fromdateiso8601);
+            (map(.cost // 0) | add) as $cost
+            | ([.[] | select(.startedAt and .endedAt) | secs(.startedAt;.endedAt)] | add) as $sec
+            | {
+                llamadas: length,
+                coste_total_usd: ($cost*10000|round/10000),
+                minutos_total: (($sec/60)*100|round/100),
+                coste_por_minuto_usd: (if $sec>0 then ($cost/($sec/60))*1000|round/1000 else null end),
+                coste_medio_llamada_usd: (if length>0 then ($cost/length)*1000|round/1000 else null end)
+              }'
+          echo ""
+          echo "=== DESGLOSE POR COMPONENTE (suma) ==="
+          echo "$C" | jq '[.[].costs[]?] | group_by(.type)
+            | map({tipo: .[0].type, usd: ((map(.cost)|add)*10000|round/10000)}) | sort_by(-.usd)'
+          echo ""
+          echo "=== Fallback costBreakdown (si no hay .costs) ==="
+          echo "$C" | jq '[.[].costBreakdown // empty]
+            | {transport:(map(.transport//0)|add), stt:(map(.stt//0)|add), llm:(map(.llm//0)|add), tts:(map(.tts//0)|add), vapi:(map(.vapi//0)|add), analysis:(map(.analysis//0)|add)}'
+          echo ""
+          echo "=== POR MOTIVO DE FIN (nº y coste) ==="
+          echo "$C" | jq 'group_by(.endedReason)
+            | map({motivo: (.[0].endedReason // "?"), n: length, usd: ((map(.cost//0)|add)*1000|round/1000)}) | sort_by(-.usd)'
+          echo ""
+          echo "=== LAS 15 LLAMADAS MÁS CARAS (dur s / coste / motivo) ==="
+          echo "$C" | jq -r '
+            def secs(a;b): (b|sub("\\.[0-9]+Z$";"Z")|fromdateiso8601) - (a|sub("\\.[0-9]+Z$";"Z")|fromdateiso8601);
+            [.[] | {
+              ini: (.startedAt // "?"),
+              dur: (if .startedAt and .endedAt then (secs(.startedAt;.endedAt)|floor) else 0 end),
+              usd: (.cost // 0),
+              motivo: (.endedReason // "?")
+            }] | sort_by(-.usd) | .[0:15][]
+            | "\(.ini)  \(.dur)s  $\(.usd)  \(.motivo)"'
