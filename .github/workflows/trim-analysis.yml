@@ -1,0 +1,28 @@
+name: Trim post-call analysis (cost)
+
+# Desactiva el análisis post-llamada que el servidor NO consume (scorecard
+# y structured outputs) para ahorrar coste. Conserva summaryPlan y
+# structuredDataPlan (que sí alimentan el resumen + rellamada de Telegram).
+on: { workflow_dispatch: {} }
+
+jobs:
+  trim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vaciar scorecard + structured outputs
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          A=$(curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY")
+          echo "artifactPlan ANTES:"; echo "$A" | jq '.artifactPlan'
+          AP=$(echo "$A" | jq '(.artifactPlan // {}) | .structuredOutputIds = [] | .scorecardIds = []')
+          RESP=$(curl -s -w "\nHTTP:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/$ASSISTANT_ID" \
+            -H "Authorization: Bearer $VAPI_API_KEY" -H "Content-Type: application/json" \
+            -d "$(jq -n --argjson ap "$AP" '{artifactPlan: $ap}')")
+          CODE=$(echo "$RESP" | grep -o 'HTTP:[0-9]*' | cut -d: -f2)
+          [ "$CODE" = "200" ] || { echo "❌ PATCH falló (HTTP $CODE)"; echo "$RESP"; exit 1; }
+          echo "artifactPlan DESPUÉS:"
+          curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY" | jq '{artifactPlan, summaryPlan: .analysisPlan.summaryPlan.enabled, structuredDataPlan: .analysisPlan.structuredDataPlan.enabled}'
+          echo "✅ Scorecard y structured outputs desactivados. Resumen + rellamada intactos."
