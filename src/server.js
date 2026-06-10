@@ -308,38 +308,37 @@ app.post('/vapi/assistant-config', (req, res) => {
       analysisSummary: msg?.analysis?.summary,
     }));
     const duration = msg?.durationSeconds ? Math.round(msg.durationSeconds) : null;
-    const cost = msg?.cost ? msg.cost.toFixed(3) : null;
-    const summary = msg?.summary || msg?.analysis?.summary || null;
-    const transcript = msg?.transcript || '';
     const phone = msg?.customer?.number || 'test';
-    const structuredData = msg?.analysis?.structuredData || null;
+    const sd = msg?.analysis?.structuredData || null;
 
-    const tl = transcript.toLowerCase();
-    const tipo = tl.includes('cajetín') || tl.includes('código') || tl.includes('no puedo entrar') ? 'Emergencia acceso' :
-                 tl.includes('disponibilidad') || tl.includes('reservar') ? 'Consulta reserva' :
-                 tl.includes('pelea') || tl.includes('emergencia') || tl.includes('médico') ? 'URGENCIA' :
-                 'Info general';
+    // Campos esquemáticos (vienen del structuredDataPlan de Vapi)
+    const llamar = sd?.llamar === true;
+    const motivo = sd?.motivo || '—';
+    const descripcion = sd?.descripcion || msg?.summary || msg?.analysis?.summary || '(sin descripción)';
 
-    const durStr = duration ? `${Math.floor(duration/60)}m ${duration%60}s` : '—';
+    // Coste con coma decimal y 2 decimales
+    const costeStr = (typeof msg?.cost === 'number') ? `${msg.cost.toFixed(2).replace('.', ',')} €` : '—';
+    // Duración mm:ss
+    const durStr = duration != null ? `${Math.floor(duration/60)}m ${duration%60}s` : '—';
+    // Momento de la llamada (hora de Murcia)
+    const started = msg?.startedAt ? new Date(msg.startedAt) : new Date();
+    const momento = started.toLocaleString('es-ES', {
+      timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
 
-    let callbackLine = '';
-    if (structuredData) {
-      const emoji = structuredData.llamar ? '📞' : '✅';
-      const label = structuredData.llamar ? 'LLAMAR' : 'No llamar';
-      const motivo = structuredData.motivo || '';
-      callbackLine = `\n${emoji} ${label}${motivo ? ` — ${motivo}` : ''}`;
-    }
+    const cabecera = llamar ? '📞 LLAMAR' : '✅ No llamar';
 
-    console.log(`[end-of-call] ${phone} | ${tipo} | ${durStr} | €${cost||'—'} | callback: ${structuredData?.llamar ?? '?'}`);
+    console.log(`[end-of-call] ${phone} | ${motivo} | ${durStr} | ${costeStr} | llamar: ${llamar}`);
 
     sendTelegram(
-      `Llamada Konk Hostel\n\n` +
-      `Numero: ${phone}\n` +
-      `Tipo: ${tipo}\n` +
-      `Duracion: ${durStr}\n` +
-      `Coste: ${cost ? `€${cost}` : '—'}` +
-      `${callbackLine}\n\n` +
-      `${summary || 'Sin resumen'}`
+      `🏨 Konk Hostel · llamada\n\n` +
+      `${cabecera}\n` +
+      `📋 Motivo: ${motivo}\n` +
+      `📝 ${descripcion}\n\n` +
+      `💶 Coste: ${costeStr}\n` +
+      `⏱️ Duración: ${durStr}\n` +
+      `🕐 Cuándo: ${momento}\n` +
+      `📱 Tel: ${phone}`
     ).catch(console.error);
 
     return res.json({});
