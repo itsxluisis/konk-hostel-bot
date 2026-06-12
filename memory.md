@@ -19,8 +19,8 @@ A comprehensive system prompt has been produced (English), including tool call d
 **Admin panel:**
 A React-based single-HTML-file admin panel was built, connecting to Vapi via API key. Features: prompt editing, knowledge base management, voice/language config, browser test calls, call history with transcriptions, and an emergency detection panel.
 
-**Unresolved issue – security risk:**
-The bot is hallucinating reservation verifications because the `check_reservation` webhook does not yet exist. Luis was presented with two options (deploy a minimal blocking endpoint vs. temporarily disable verification in the prompt) but did not select one before the conversation ended. **This requires a decision before going live.**
+**Unresolved issue – security risk:** ✅ **CERRADO (2026-06)** — la verificación de reservas se sacó del scope del bot de voz: el prompt actual no verifica reservas ni da códigos, y el código de `check_reservation` se eliminó del servidor. El bot solo informa, consulta disponibilidad y redirige.
+~~The bot is hallucinating reservation verifications because the `check_reservation` webhook does not yet exist. Luis was presented with two options (deploy a minimal blocking endpoint vs. temporarily disable verification in the prompt) but did not select one before the conversation ended. **This requires a decision before going live.**~~
 
 **Vapi API key was accidentally shared in chat** – Luis was advised to regenerate it immediately. Status of this action is unconfirmed.
 
@@ -35,10 +35,10 @@ The bot is hallucinating reservation verifications because the `check_reservatio
 
 **On the horizon**
 
-- Decide on `check_reservation` webhook solution (minimal blocking endpoint vs. prompt-level disable) before deploying the Vapi assistant
-- Confirm Vapi API key has been regenerated
-- Cloudbeds API integration (direct booking gateway rebuild)
-- Populate cabinet code placeholders in both the Vapi system prompt and UpMarket knowledge base
+- ~~Decide on `check_reservation` webhook solution~~ ✅ Cerrado: feature fuera de scope, código eliminado (2026-06)
+- Confirm Vapi API key has been regenerated (sigue pendiente — ver CLAUDE.md)
+- ~~Cloudbeds API integration~~ ✅ Hecha: get_availability en producción; reservas directas via haztureserva.app
+- Populate cabinet code placeholders in the UpMarket knowledge base (el prompt de voz ya no usa códigos)
 
 **Tools & resources**
 

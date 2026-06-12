@@ -14,10 +14,10 @@ Automatización 100% remota y sin personal del **Konk Hostel** (La Manga del Mar
 | UpMarket | Bot mensajería / concierge virtual | KB en `upmarket/knowledge-base.md` |
 | Vikey | Check-in online + cerradura inteligente | Activo |
 | PricePoint | Pricing dinámico | Activo |
-| Vapi | Asistente de voz IA | En despliegue |
+| Vapi | Asistente de voz IA | **En producción** (LLM gpt-4o-mini · voz ElevenLabs `eleven_turbo_v2_5` · STT Deepgram nova-3 es) |
 | Sipgate Free | Puente SIP Android → Vapi | Configurado |
-| Telegram | Resumen automático de cada llamada | Activo |
-| Booking.com | Canal actual de nuevas reservas | Activo (mientras se rehace pasarela directa) |
+| Telegram | Resumen esquemático de cada llamada | Activo |
+| haztureserva.app | Canal de nuevas reservas (el bot dirige aquí) | Activo |
 
 ## Arquitectura de llamadas
 
@@ -52,28 +52,39 @@ Al terminar cada llamada, Vapi envía el `end-of-call-report` al servidor, que r
 
 ## Estado actual
 
-- **Prompt Vapi (EN):** `vapi/system-prompt.md`
-- **Tool activa:** `vapi/tools/get_availability.json`
+- **Prompt Vapi (ES):** `vapi/system-prompt.md` — se sincroniza solo al hacer push (Action `sync-vapi.yml`)
+- **Tool get_availability:** `vapi/tools/get_availability.json` (documentación; el schema real vive en Vapi)
+- **Lógica de disponibilidad:** `src/availability.js` (pura, testeada en `test/availability.test.js`)
 - **KB UpMarket (ES):** `upmarket/knowledge-base.md`
-- **Admin panel:** `admin-panel/index.html`
-- **Webhook server:** `ANTIGRAVITY/BOT LLAMADAS KONK/konk-webhook/konk-webhook/src/server.js`
+- **Admin panel:** `public/index.html` (servido en `/admin-panel`)
+- **Webhook server:** `src/server.js` (Node/Express en EasyPanel)
+
+## Deploy y CI
+
+- **Push a `main` = deploy**: EasyPanel auto-despliega en <1 min. Verificar con `/health`.
+- **Push que toque `vapi/system-prompt.md`** → la Action `sync-vapi.yml` lo sube a Vapi.
+- ⚠️ **Editar el assistant en el dashboard de Vapi pisa lo subido por API** — tras tocar el
+  dashboard, re-ejecutar `sync-vapi.yml` (workflow_dispatch).
+- `verify-assistant.yml` (manual) lee el assistant en vivo y comprueba los marcadores clave.
+- `remove-pronunciation.yml` (manual) desengancha el diccionario de pronunciación si
+  reapareciera (rompe la voz con modelos ≠ flash_v2/turbo_v2).
 
 ## Pendientes
 
-1. **Activar `end_call` en el asistente Vapi** — habilitarlo en la configuración del assistant (es una tool built-in de Vapi).
-2. **Confirmar regeneración de la API key de Vapi** — se compartió accidentalmente en sesión anterior.
-3. **Rellenar `{{WHATSAPP_NUMBER}}`** en `vapi/system-prompt.md` cuando esté listo.
-4. **Desplegar cambios** subiendo el código actualizado a EasyPanel.
+1. **Rotar la VAPI_API_KEY** — se compartió accidentalmente en una sesión antigua (actualizar también los secrets del repo).
+2. **Añadir el parámetro `preference`** (enum private/shared/any) al schema de la tool `get_availability` en Vapi — el servidor ya lo soporta (default `any`).
+3. **Afinar turn-detection/endpointing** en Vapi para bajar latencia (los waits por defecto añaden ~1,5s).
+4. **Rellenar placeholders de la KB UpMarket** (códigos de armarios, parking, mascotas) y re-subirla al panel.
 
 ## Cómo trabajar en este repo
 
-- Cambios en el prompt Vapi → editar `vapi/system-prompt.md`, luego sincronizar con la API de Vapi o vía panel admin.
+- Cambios en el prompt Vapi → editar `vapi/system-prompt.md` y hacer push (se sincroniza solo).
 - Cambios en la KB de UpMarket → editar `upmarket/knowledge-base.md` y subirla al panel de UpMarket.
-- Cambios en el servidor → editar `src/server.js` y redesplegar en EasyPanel.
-- Variables de entorno → `.env.example`.
+- Cambios en el servidor → editar `src/` y hacer push (EasyPanel auto-despliega). Correr antes `node test/availability.test.js`.
+- Variables de entorno → documentadas en `.env.example`; los valores reales viven en EasyPanel.
 
 ## Convenciones
 
-- Idiomas: prompt Vapi en **EN**, KB UpMarket en **ES**, docs y código en **ES**.
-- Placeholders con doble llave: `{{WHATSAPP_NUMBER}}`, etc.
+- Idiomas: prompt Vapi en **ES**, KB UpMarket en **ES**, docs y código en **ES**.
+- Placeholders con doble llave: `{{CABINET_CODE_...}}`, etc.
 - Nada de claves reales en el repo.

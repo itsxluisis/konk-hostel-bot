@@ -35,3 +35,5 @@ jobs:
           BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
           echo "HTTP $HTTP_STATUS"
           echo "$BODY" | jq '{id, name, updatedAt}' 2>/dev/null || echo "$BODY"
+          # Fallar el job si el PATCH no fue 2xx — un sync roto no debe salir en verde
+          case "$HTTP_STATUS" in 2*) ;; *) echo "❌ Sync falló (HTTP $HTTP_STATUS)"; exit 1;; esac

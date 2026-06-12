@@ -47,13 +47,13 @@ Los códigos son distintos según el tipo de habitación:
 
 ## Reservas nuevas
 
-- En este momento, todas las reservas nuevas se gestionan a través de **Booking.com**.
-- La pasarela de reserva directa está en proceso de reconstrucción.
+- Las reservas nuevas se hacen online en **haztureserva.app** (no se gestionan por chat ni por teléfono).
+- También se puede reservar a través de Booking.com.
 
 ## Pagos y modificaciones
 
-- Pagos: gestionados por el canal donde se hizo la reserva (Booking.com).
-- Cambios de fecha o cancelaciones: según las políticas del canal donde se hizo la reserva.
+- Pagos: gestionados por el canal donde se hizo la reserva (haztureserva.app o Booking.com).
+- Cambios de fecha o cancelaciones: según las políticas del canal donde se hizo la reserva. Reservas de konkhostel.es/haztureserva.app: email a reservas@konkhostel.es (gratis con más de 3 días de antelación; 100% de cargo dentro de los 3 días previos a la entrada).
 
 ## Contacto y emergencias
 

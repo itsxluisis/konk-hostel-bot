@@ -140,8 +140,10 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} pax, pref=${preference})`);
 
   try {
-    const { rooms, totalCapacity } = await getAvailability(checkin_date, checkout_date, guests);
-    const reply = buildReply({ rooms, totalCapacity, guests, preference });
+    const { rooms, totalCapacity, nights } = await getAvailability(checkin_date, checkout_date, guests);
+    // Fallback por si Cloudbeds no devolviera nights: calcularlo de las fechas
+    const stayNights = nights || Math.max(1, Math.round((new Date(checkout_date) - new Date(checkin_date)) / 86400000));
+    const reply = buildReply({ rooms, totalCapacity, guests, preference, nights: stayNights });
     console.log(`[get-availability] reply: ${reply}`);
     return vapiReply(req, res, reply);
   } catch (err) {
@@ -267,8 +269,10 @@ app.post('/admin/login', (req, res) => {
 // ─── ADMIN: reservas hoy y mañana ─────────────────────────────────────────────
 app.get('/admin/reservations-today', vapiAuth, async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    // Fecha en hora de Madrid (en-CA da formato YYYY-MM-DD); UTC mostraría
+    // el día anterior entre las 00:00 y la 01:00/02:00 hora española.
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+    const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
     const { getReservationsByDate } = require('./cloudbeds');
     const [todayRes, tomorrowRes] = await Promise.all([
       getReservationsByDate(today),
@@ -307,7 +311,7 @@ app.post('/vapi/assistant-config', (req, res) => {
       summary: msg?.summary,
       analysisSummary: msg?.analysis?.summary,
     }));
-    const duration = msg?.durationSeconds ? Math.round(msg.durationSeconds) : null;
+    const duration = msg?.durationSeconds != null ? Math.round(msg.durationSeconds) : null;
     const phone = msg?.customer?.number || 'test';
     const sd = msg?.analysis?.structuredData || null;
 
