@@ -174,13 +174,23 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
 
   const categoryLabel = INCIDENT_CATEGORY_LABELS[category] || category.toUpperCase();
 
+  // Mismo lugar del payload que usa /vapi/assistant-config (end-of-call-report: msg.customer.number),
+  // con fallbacks encadenados por si la estructura del tool-call difiere.
+  const phone =
+    req.body?.message?.customer?.number
+    || req.body?.message?.call?.customer?.number
+    || req.body?.customer?.number
+    || 'no detectado';
+  const phoneLabel = phone === 'no detectado' ? 'no detectado (ver resumen de llamada)' : phone;
+
   const msg =
     `🔴 INCIDENCIA — ${categoryLabel}\n` +
     `Huésped: ${guest_name}\n` +
     `Habitación: ${room}\n` +
+    `Teléfono: ${phoneLabel}\n` +
     `Detalle: ${description}`;
 
-  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${description}`);
+  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}`);
 
   try {
     await sendTelegram(msg);
