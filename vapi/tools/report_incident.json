@@ -1,0 +1,41 @@
+{
+  "type": "function",
+  "function": {
+    "name": "report_incident",
+    "description": "Escala una incidencia de un huésped CON reserva al equipo del hostel (vía Telegram). Úsala para problemas de acceso persistentes, incidencias de la estancia (mantenimiento, limpieza, ruido) o peticiones de contacto. NUNCA para emergencias graves (fuego, herido, violencia) — esas son 112. Read-only respecto al PMS: solo notifica al equipo, no modifica reservas.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "guest_name": {
+          "type": "string",
+          "description": "Nombre del huésped tal como lo dice."
+        },
+        "room": {
+          "type": "string",
+          "description": "Habitación o número de reserva del huésped. Si no lo sabe, 'no sabe'."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["acceso", "mantenimiento", "limpieza", "ruido", "otro"],
+          "description": "Tipo de incidencia. 'acceso' para fallos de entrada con Vikey; 'otro' para peticiones de contacto."
+        },
+        "description": {
+          "type": "string",
+          "description": "Descripción breve de lo que ocurre, en español."
+        }
+      },
+      "required": ["guest_name", "category", "description"]
+    }
+  },
+  "server": {
+    "url": "{{WEBHOOK_BASE_URL}}/vapi/report-incident",
+    "secret": "{{VAPI_SECRET}}",
+    "timeoutSeconds": 8
+  },
+  "messages": [
+    {
+      "type": "request-start",
+      "content": "Un momento, aviso al equipo."
+    }
+  ]
+}

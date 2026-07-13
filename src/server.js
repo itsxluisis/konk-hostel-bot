@@ -155,6 +155,42 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
 
 
 
+// ─── VAPI TOOL: report_incident ──────────────────────────────────────────────
+// Escala una incidencia de huésped al equipo del hostel vía Telegram.
+const INCIDENT_CATEGORY_LABELS = {
+  acceso: 'ACCESO',
+  mantenimiento: 'MANTENIMIENTO',
+  limpieza: 'LIMPIEZA',
+  ruido: 'RUIDO',
+  otro: 'OTRO',
+};
+
+app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
+  const args = getToolArgs(req);
+  const guest_name = args.guest_name || 'no indicado';
+  const room = args.room || 'no indicada';
+  const category = args.category || 'otro';
+  const description = args.description || 'sin detalle';
+
+  const categoryLabel = INCIDENT_CATEGORY_LABELS[category] || category.toUpperCase();
+
+  const msg =
+    `🔴 INCIDENCIA — ${categoryLabel}\n` +
+    `Huésped: ${guest_name}\n` +
+    `Habitación: ${room}\n` +
+    `Detalle: ${description}`;
+
+  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${description}`);
+
+  try {
+    await sendTelegram(msg);
+  } catch (err) {
+    console.error('[report-incident] Error enviando a Telegram:', err.message);
+  }
+
+  return vapiReply(req, res, 'Incidencia registrada y equipo avisado.');
+});
+
 // ─── VAPI TOOL: get_weather ──────────────────────────────────────────────────
 // La Manga del Mar Menor: 37.64°N, -0.73°E
 app.post('/vapi/get-weather', async (req, res) => {

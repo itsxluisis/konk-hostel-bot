@@ -37,14 +37,15 @@ https://rentalme-konk-bot-webhook.sklshk.easypanel.host
 
 ## Scope del agente de voz
 
-El bot atiende llamadas entrantes y puede:
+Nada más descolgar bifurca entre **reserva** (aún no ha reservado) y **soporte** (ya tiene reserva). El bot atiende llamadas entrantes y puede:
 1. **Responder preguntas frecuentes** — check-in/out, WiFi, acceso, servicios
 2. **Consultar disponibilidad y tarifas** — via `get_availability` (Cloudbeds API)
-3. **Redirigir al WhatsApp del hostel** para cualquier gestión o incidencia
-4. **Emergencias flagrantes** (incendio, pelea) → indicar llamar al 112 + escribir por WhatsApp
-5. **Cerrar la llamada** con `end_call` al terminar
+3. **Dar soporte al huésped con reserva** — acceso Vikey paso a paso, info de la estancia (WiFi, lavandería, cocina, normas), y recomendaciones de la zona (conserje)
+4. **Escalar incidencias al equipo** — via `report_incident` (Telegram): fallos de acceso persistentes, incidencias de la estancia o peticiones de contacto
+5. **Emergencias flagrantes** (incendio, pelea) → indicar llamar al 112 + escribir por WhatsApp
+6. **Cerrar la llamada** con `end_call` al terminar
 
-El bot **no** gestiona reservas, no da códigos de acceso físico, no escala incidencias por Telegram directamente.
+El bot **no** gestiona reservas (dirige a haztureserva.app) y **nunca da códigos de acceso ni claves por teléfono** (si el acceso falla, escala con `report_incident`).
 
 ## Resumen automático de llamadas (Telegram)
 
