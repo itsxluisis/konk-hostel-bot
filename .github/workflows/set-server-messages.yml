@@ -1,0 +1,30 @@
+name: Set server messages (Telegram avisos)
+
+# Asegura que el assistant de Vapi envíe el evento end-of-call-report al webhook.
+# Sin esto, no llega a Telegram el resumen de cada llamada.
+# Re-ejecutar si un edit en el dashboard de Vapi vuelve a pisar serverMessages.
+on: { workflow_dispatch: {} }
+
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PATCH serverMessages
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -n '{ serverMessages: ["end-of-call-report"] }')
+          RESP=$(curl -s -w "\nHTTP:%{http_code}" -X PATCH "https://api.vapi.ai/assistant/$ASSISTANT_ID" \
+            -H "Authorization: Bearer $VAPI_API_KEY" -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          CODE=$(echo "$RESP" | grep -o 'HTTP:[0-9]*' | cut -d: -f2)
+          [ "$CODE" = "200" ] || { echo "❌ PATCH falló (HTTP $CODE)"; echo "$RESP"; exit 1; }
+          echo "serverMessages DESPUÉS:"
+          curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY" \
+            | jq '.serverMessages'
+          echo "server.url:"
+          curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY" \
+            | jq '.server.url'
+          echo "✅ end-of-call-report activado."
