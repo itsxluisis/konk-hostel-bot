@@ -1,0 +1,30 @@
+name: Diag server messages
+
+# Diagnóstico: vuelca la config de entrega de eventos del assistant
+# (serverMessages, server.url, analysisPlan) para saber por qué no
+# llegan los avisos de fin de llamada a Telegram. No modifica nada.
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Volcar config de servidor del assistant
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          A=$(curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY")
+          echo "=== serverMessages (deben incluir end-of-call-report) ==="
+          echo "$A" | jq '.serverMessages'
+          echo "=== server (url / timeout / headers?) ==="
+          echo "$A" | jq '.server | {url, timeoutSeconds, secretSet: (.secret != null)}'
+          echo "=== server.url a nivel raíz (legacy) ==="
+          echo "$A" | jq '.serverUrl'
+          echo "=== analysisPlan (structuredData / summary) ==="
+          echo "$A" | jq '{sd_enabled: .analysisPlan.structuredDataPlan.enabled, summary_enabled: .analysisPlan.summaryPlan.enabled}'
+          echo "=== ¿end-of-call-report presente en serverMessages? ==="
+          echo "$A" | jq -e '.serverMessages | index("end-of-call-report")' >/dev/null \
+            && echo "  ✓ SÍ está" || echo "  ✗ NO está — esta es la causa"
