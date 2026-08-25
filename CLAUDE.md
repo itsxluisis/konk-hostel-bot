@@ -67,6 +67,10 @@ Al terminar cada llamada, Vapi envía el `end-of-call-report` al servidor, que r
 - ⚠️ **Editar el assistant en el dashboard de Vapi pisa lo subido por API** — tras tocar el
   dashboard, re-ejecutar `sync-vapi.yml` (workflow_dispatch).
 - `verify-assistant.yml` (manual) lee el assistant en vivo y comprueba los marcadores clave.
+- `set-server-messages.yml` (manual) reactiva `serverMessages: ["end-of-call-report"]`. ⚠️ Si el bot
+  atiende pero **no llega el resumen a Telegram**, casi siempre es que un edit en el dashboard dejó
+  `serverMessages` en null (Vapi deja de mandar el fin de llamada): re-ejecuta este workflow.
+  Diagnóstico: `diag-server-messages.yml` vuelca serverMessages/server.url en vivo.
 - `remove-pronunciation.yml` (manual) desengancha el diccionario de pronunciación si
   reapareciera (rompe la voz con modelos ≠ flash_v2/turbo_v2).
 
