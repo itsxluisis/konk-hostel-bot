@@ -64,9 +64,25 @@ async function comprobar() {
   for (const p of PRUEBAS) {
     try {
       const r = await api(p.metodo, p.ruta, p.datos);
-      // Que salga bien con un id imposible sería rarísimo; se anota tal cual.
-      salida.push({ ...p, datos: undefined, permitido: true,
-        motivo: 'respondió sin error', crudo: JSON.stringify(r).slice(0, 200) });
+      // OJO: Cloudbeds contesta 200 con success:false cuando algo va mal.
+      // Sin mirar el cuerpo, un rechazo parece un éxito.
+      const dijo = (r?.message || r?.error || '').toString();
+      if (r && r.success === false) {
+        const sinPermiso = /scope|permission|unauthorized|not allowed/i.test(dijo);
+        salida.push({
+          clave: p.clave, que: p.que, ruta: p.ruta,
+          permitido: sinPermiso ? false : true,
+          motivo: sinPermiso ? 'falta permiso (scope)'
+            : 'acepta la llamada; la rechaza por los datos de prueba',
+          codigo: '200 (success:false)', dijo: dijo.slice(0, 200),
+        });
+      } else {
+        salida.push({
+          clave: p.clave, que: p.que, ruta: p.ruta,
+          permitido: true, motivo: '⚠️ respondió que SÍ con un id inexistente',
+          codigo: 200, dijo: JSON.stringify(r).slice(0, 300),
+        });
+      }
     } catch (err) {
       const i = interpretar(err);
       salida.push({
