@@ -137,6 +137,7 @@ async function estadoEscucha() {
 let sondeando = false;
 let ultimoUpdate = 0;
 let ultimoLatidoSondeo = null;
+let ultimoErrorSondeo = null;
 
 async function unaVuelta() {
   const t = process.env.TELEGRAM_BOT_TOKEN;
@@ -186,8 +187,11 @@ function arrancarSondeo() {
         fallos++;
         const desc = err.response?.data?.description || err.message;
         // 409 = hay un webhook puesto; el sondeo y el webhook se estorban.
+        ultimoErrorSondeo = { cuando: new Date().toISOString(), status: err.response?.status || null, desc };
         if (err.response?.status === 409) {
-          console.error('[Encargado] Sondeo en conflicto con un webhook activo:', desc);
+          // Otro proceso está haciendo getUpdates con el mismo bot, o hay un
+          // webhook puesto. Insistir solo empeora las cosas: se para y se dice.
+          console.error('[Encargado] Sondeo en conflicto:', desc);
           sondeando = false;
           return;
         }
@@ -200,7 +204,8 @@ function arrancarSondeo() {
 }
 
 function estadoSondeo() {
-  return { activo: sondeando, ultimoUpdate, ultimaVuelta: ultimoLatidoSondeo };
+  return { activo: sondeando, ultimoUpdate, ultimaVuelta: ultimoLatidoSondeo,
+           ultimoError: ultimoErrorSondeo };
 }
 
 module.exports = {

@@ -211,21 +211,179 @@ curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/
 
 **Nota:** si falla alguna consulta a Cloudbeds, el parte no dice "ocupación cero"; avisa de que no ha podido leer y explica por qué.
 
+---
+
+### `POST /encargado/telegram`
+
+Webhook público que recibe eventos de Telegram. **NO usa la autenticación normal del Encargado**: se valida solo con la cabecera `x-telegram-bot-api-secret-token` que Telegram envía al registrar el webhook.
+
+Siempre responde **200** aunque algo falle internamente, porque devolver error hace que Telegram reintente en bucle y acabe desactivando el webhook.
+
+**Headers (enviados por Telegram):**
+```
+x-telegram-bot-api-secret-token: <ENCARGADO_TG_SECRET>
+Content-Type: application/json
+```
+
+**Body (enviado por Telegram):**
+```json
+{
+  "update_id": 12345,
+  "message": {
+    "message_id": 1,
+    "from": { "id": ..., "first_name": "..." },
+    "chat": { "id": <TELEGRAM_CHAT_ID>, "title": "Konk Staff" },
+    "topic_id": 5,
+    "text": "¿quién llega mañana?",
+    "reply_to_message": { ... }
+  }
+}
+```
+
+**Validación (3 cerrojos):**
+1. **Firma de Telegram:** cabecera `x-telegram-bot-api-secret-token` debe coincidir con `ENCARGADO_TG_SECRET` (o fallback a `ENCARGADO_SECRET` o `VAPI_SECRET`). Si no, se ignora silenciosamente.
+2. **Chat correcto:** solo se atiende al chat de `TELEGRAM_CHAT_ID`. A cualquier otro chat privado, se ignora (ni siquiera se responde).
+3. **Contexto de conversación:** dentro del grupo solo contesta si:
+   - Está en el tema `TG_TEMA_PREGUNTAR` (si está definido), O
+   - Se le menciona por su @, O
+   - Responde a un mensaje suyo, O
+   - El mensaje empieza por `/`, O
+   - El mensaje empieza por "Encargado," (sin distinción de mayúsculas).
+   
+   Si no se cumplen estas condiciones, no se mete en la conversación (silencio total).
+
+**Response (siempre 200):**
+```json
+{
+  "ok": true
+}
+```
+
+---
+
+### `POST /encargado/registrar-escucha`
+
+Registra el webhook en Telegram (operación única). Acepta `{"url": "https://..."}` en el body; si no se pasa, deduce la URL de la petición.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Body:**
+```json
+{
+  "url": "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/telegram"
+}
+```
+
+**Ejemplo curl:**
+```bash
+curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/registrar-escucha" \
+  -H "x-encargado-secret: tu-secret-aqui" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/telegram"}'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "url": "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/telegram",
+  "registrado_en_telegram": true
+}
+```
+
+---
+
+### `GET /encargado/escucha`
+
+Consulta el estado del webhook: si hay cerebro (Claude disponible) y cómo está configurado.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Ejemplo curl:**
+```bash
+curl "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/escucha" \
+  -H "x-encargado-secret: tu-secret-aqui"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "cerebro": true,
+  "modelo": "claude-haiku-4-5-20251001",
+  "webhook_registrado": true,
+  "tema_preguntas": "TG_TEMA_PREGUNTAR"
+}
+```
+
+---
+
+### `POST /encargado/preguntar`
+
+Probar una pregunta sin pasar por Telegram. Muy útil para depurar.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Body:**
+```json
+{
+  "pregunta": "¿quién llega mañana?"
+}
+```
+
+**Ejemplo curl:**
+```bash
+curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/preguntar" \
+  -H "x-encargado-secret: tu-secret-aqui" \
+  -H "Content-Type: application/json" \
+  -d '{"pregunta": "¿quién llega mañana?"}'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "pregunta": "¿quién llega mañana?",
+  "consulta_elegida": "quien_llega",
+  "parametros": {
+    "fecha": "2026-09-11"
+  },
+  "respuesta": "Llega Cristian (habitación 3)...",
+  "modo": "cerebro"
+}
+```
+
+Si no hay `ANTHROPIC_API_KEY`, el `modo` es `"palabras_clave"` y funciona igual, solo que sin conversación natural.
+
 ## Variables de entorno
 
 | Variable | Descripción | Obligatoria | Default |
 |---|---|---|---|
 | `ENCARGADO_SECRET` | Secret para autenticar latidos y consultas | No | `VAPI_SECRET` |
 | `ENCARGADO_DATA_DIR` | Carpeta donde guardar `encargado.json` | No | `./data` |
+| `ANTHROPIC_API_KEY` | API key de Anthropic (opcional; sin ella funciona modo palabras clave) | No | — |
+| `ENCARGADO_MODELO` | Modelo Claude para el cerebro del Encargado | No | `claude-haiku-4-5-20251001` |
+| `ENCARGADO_TG_SECRET` | Secret que firma Telegram en el webhook | No | `ENCARGADO_SECRET` o `VAPI_SECRET` |
 | `TG_TEMA_ESTADO` | ID del tema Telegram para estado general | No | Tema General |
 | `TG_TEMA_PARTE` | ID del tema Telegram para parte diario | No | Tema General |
 | `TG_TEMA_ALERTAS` | ID del tema Telegram para alertas | No | Tema General |
 | `TG_TEMA_LLAMADAS` | ID del tema Telegram para resumen de llamadas Vapi | No | Tema General |
 | `TG_TEMA_COBROS` | ID del tema Telegram para vigilante de cobros | No | Tema General |
 | `TG_TEMA_FACTURAS` | ID del tema Telegram para facturador | No | Tema General |
-| `TG_TEMA_PREGUNTAR` | ID del tema Telegram para acciones que requieren aprobación | No | Tema General |
+| `TG_TEMA_PREGUNTAR` | ID del tema Telegram para preguntas y escucha | No | Tema General |
 
 **Nota:** los `TG_TEMA_*` son **opcionales**. Si no se proporcionan, todos los mensajes van al tema General de Telegram.
+
+**Sobre `ANTHROPIC_API_KEY`:** si no está definida, el Encargado sigue funcionando en modo "palabras clave" (empareja por keywords de la pregunta y devuelve los datos igual), solo que sin conversación natural con Claude.
 
 ## Archivos
 
@@ -244,9 +402,76 @@ curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/
 - `src/encargado/parte.js` — funciones puras que convierten la foto de Cloudbeds en texto. Exporta `estadoFijado()` (resumen corto para el mensaje fijado, ej. "🏨 12 huéspedes") y `parteDiario()` (resumen largo con detalles).
 - `src/encargado/agenda.js` — reloj de ejecución automática: envía el parte diario a las 09:15 hora de Madrid (configurable con `ENCARGADO_HORA_PARTE`) y refresca el mensaje de ESTADO fijado cada hora. Persiste la marca "ya enviado hoy" en disco para que un redespliegue no lo repita.
 
+### Consultas y cerebro (F2)
+
+- `src/encargado/consultas.js` — catálogo de consultas que sabe responder (solo lectura):
+  - `estado_del_dia(fecha)` — ocupación, llegadas, salidas, prórrogas.
+  - `quien_llega(fecha)` — huéspedes que llegan en una fecha.
+  - `quien_se_va(fecha)` — huéspedes que se van en una fecha.
+  - `quien_esta_dentro(fecha)` — huéspedes dentro en una fecha.
+  - `buscar_huesped(nombre)` — búsqueda por nombre de huésped.
+  - `como_va_el_equipo(fecha)` — resumen de si los agentes (facturador, vigilante) han reportado hoy.
+  - `revisar_cobros(fecha)` — estado de cobros de Cloudbeds sin facturar.
+  
+  Las fechas aceptan "hoy", "mañana", "ayer" o formato AAAA-MM-DD. Cada entrada contiene su función, descripción y esquema de parámetros para que Claude las use como tools.
+
+- `src/encargado/cerebro.js` — entiende la pregunta en lenguaje natural. Con `ANTHROPIC_API_KEY` usa Claude pasándole las consultas como herramientas (tool use). Sin clave sigue funcionando: empareja por palabras clave y devuelve los mismos datos, solo que sin conversación. Si el cerebro falla, cae al modo simple en vez de quedarse callado.
+
+- `src/encargado/escucha.js` — el webhook de Telegram. Valida firma, filtra chat y contexto, desambigua la pregunta y llama al cerebro.
+
 ### Tests
 
-- `test/encargado.test.js` — 27 casos; ejecutar con `node test/encargado.test.js`.
+- `test/encargado.test.js` — 27 casos para F0 y F1; ejecutar con `node test/encargado.test.js`.
+- `test/escucha.test.js` — 18 casos para F2 (validación de webhook, autenticación, filtro de chat/contexto, elección de consulta); ejecutar con `node test/escucha.test.js`.
+
+## Seguridad del webhook de Telegram (F2)
+
+El webhook es una puerta pública. Tres cerrojos evitan que cualquiera abuse:
+
+### 1. Firma de Telegram
+Telegram firma cada aviso con un secreto que solo nosotros conocemos. La cabecera `x-telegram-bot-api-secret-token` debe coincidir con `ENCARGADO_TG_SECRET` (con fallbacks a `ENCARGADO_SECRET` o `VAPI_SECRET`). Si no, se ignora silenciosamente. **No se devuelve error** porque Telegram reintentaría y acabaría desactivando el webhook.
+
+### 2. Chat correcto
+Solo se atiende al chat de `TELEGRAM_CHAT_ID` (grupo de staff del Konk). A cualquier otro chat privado donde alguien encuentre el bot, silencio total: ni se contesta, ni se registra, ni se alerta.
+
+### 3. Contexto de conversación
+Dentro del grupo solo contesta si:
+- Está en el tema `TG_TEMA_PREGUNTAR` (si está definido), O
+- Se le menciona por su @ (`@encargado_bot` u otro), O
+- Responde a un mensaje suyo, O
+- El mensaje empieza por `/` (comando), O
+- El mensaje empieza por "Encargado," (sin distinción de mayúsculas).
+
+Si no se cumplen estas condiciones, **no se mete en conversaciones ajenas**. El silencio es intencionado: evita ruido innecesario y ahorros de tokens.
+
+---
+
+## Datos, no órdenes
+
+Lo que escriben las personas en el grupo se trata como **DATO**, nunca como órdenes. Todas las consultas actuales (F2) son de **solo lectura** y ninguna modifica nada en Cloudbeds:
+- ¿Quién llega? → Solo lee reservas de Cloudbeds.
+- ¿Quién está dentro? → Solo lee estado de ocupación.
+- ¿Revisar cobros? → Solo consulta el estado sin marcar nada.
+
+Cuando llegue **F3 (acciones)**, la confirmación será explícita: el Encargado pedirá aprobación por Telegram antes de ejecutar cualquier acción que modifique datos (re-ejecutar facturador, cambiar estatus de una reserva, etc.).
+
+---
+
+## Ejemplos de preguntas que entiende
+
+Incluso sin `ANTHROPIC_API_KEY` (modo palabras clave), el Encargado reconoce y contesta:
+
+- **Llegadas:** "¿Quién llega mañana?", "llega hoy", "dame llegadas"
+- **Salidas:** "Quién se va hoy", "salidas mañana", "quién se marcha"
+- **Ocupación:** "Cuánta gente hay dentro", "cuántos hay ahora", "quiénes están"
+- **Parte:** "Dame el parte", "resumen del día", "estado del hostel"
+- **Equipo:** "Cómo va el equipo", "¿ha corrido el facturador?", "estado de agentes"
+- **Cobros:** "Revisa los cobros", "qué cobros pendientes", "estado de pagos"
+- **Búsqueda:** "Busca a Cristian", "dónde está María", "información de Juan"
+
+La precisión mejora con Claude (si `ANTHROPIC_API_KEY` está), pero el fallback de palabras clave mantiene la funcionalidad básica.
+
+---
 
 ## Cómo añadir un agente nuevo a la vigilancia
 
@@ -344,25 +569,35 @@ En el hostel es corriente que alguien alargue la estancia registrada como una re
 
 El único agente que sigue en el Mac es el **Facturador Konk** (lunes).
 
-## Pendiente / fases siguientes
+## Fases completadas y pendientes
+
+### F0: ✅ Vigilancia de latidos (base)
+Detección de ausencia de agentes locales (facturador-konk, vigilante-cobros) con revisiones cada 10 minutos. Alarma a Telegram si faltan latidos esperados. Completada.
 
 ### F1: ✅ Parte diario y mensaje de ESTADO fijado (10-sep-2026)
-Hecho y en producción. Genera un resumen diario del estado del hostel (ocupación, llegadas, salidas, prórrogas) a las 09:15 y refresca el mensaje fijado cada hora. Incluye datos sobre el vigilante de cobros.
+Resumen diario del estado del hostel (ocupación, llegadas, salidas, prórrogas) a las 09:15 y refresco del mensaje fijado cada hora. Incluye datos sobre el vigilante de cobros. Completada.
 
-### F2: Preguntar por Telegram
-El Encargado podría preguntar "¿Te doy permiso para re-ejecutar el facturador?" vía botón en Telegram, y re-dispararía el agente sin tocar el Mac. Requiere webhook entrante para recibir respuestas.
+### F2: ✅ Escucha de Telegram y respuesta inteligente (10-sep-2026)
+El Encargado atiende preguntas en el grupo de Telegram por webhook. Entiende consultas en lenguaje natural (con Claude si `ANTHROPIC_API_KEY` está, modo palabras clave si no). Consultas soportadas: estado del día, quién llega/se va/está dentro, búsqueda de huésped, estado del equipo, revisión de cobros. Validación de seguridad en 3 niveles (firma de Telegram, chat correcto, contexto de conversación). Completada.
 
-### F3: Que actúe
-El Encargado recibiría confirmación de Luis por Telegram y dispararía el agente remotamente vía SSH o API local, sin intervención manual del Mac.
+### F3: Que actúe (con confirmación)
+El Encargado recibiría confirmación de Luis por Telegram y dispararía agentes remotamente (re-ejecutar facturador, cambiar estado de reserva, etc.) sin intervención manual del Mac. Todas las acciones requerirán confirmación explícita antes de ejecutarse. **Pendiente.**
 
 ### Pendiente administrativo
 - Crear los **7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar).
 - Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas.
+- Registrar el webhook en Telegram ejecutando `POST /encargado/registrar-escucha`.
 
-## Test
+## Tests
 
+**F0 y F1 (vigilancia y parte):**
 ```bash
 node test/encargado.test.js
 ```
-
 27 casos: vigilancia de latidos (horarios cruzados, atrasados, faltas), parte diario (recolección de datos, cálculo de ocupación, prorrogas, manejo de fallos), generación de textos, persistencia y scheduling.
+
+**F2 (escucha de Telegram):**
+```bash
+node test/escucha.test.js
+```
+18 casos: validación de webhook (firma de Telegram, chat correcto, contexto de conversación), elección de consulta según la pregunta, fallback a modo palabras clave, ejemplos de preguntas reales.
