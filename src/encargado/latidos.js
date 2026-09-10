@@ -268,6 +268,35 @@ router.get('/quien-escribe', auth, (req, res) => {
   res.json({ ok: true, vistos: escucha.quienEscribe() });
 });
 
+/**
+ * POST /encargado/acciones/:nombre
+ * Lanza una acción sin pasar por Telegram. Es una vía ADMINISTRATIVA: exige
+ * el secreto del servidor, que no está en el grupo ni al alcance de nadie
+ * que solo tenga el chat. Sirve para operar y para probar.
+ *
+ * Por defecto solo PROPONE. Hay que pedir ?ejecutar=1 explícitamente, y así
+ * el camino corto sigue siendo un acto deliberado, no un descuido.
+ */
+router.post('/acciones/:nombre', auth, async (req, res) => {
+  const acciones = require('./acciones');
+  require('./acciones-basicas');
+  require('./acciones-facturas');
+  try {
+    const p = await acciones.proponer(req.params.nombre, req.body || {});
+    if (p.imposible) return res.status(409).json({ ok: false, motivo: p.motivo });
+    if (req.query.ejecutar !== '1') {
+      return res.json({ ok: true, propuesta: p.id, texto: acciones.mensaje(p),
+        nota: 'Solo propuesta. Añade ?ejecutar=1 para hacerlo de verdad.' });
+    }
+    const jefe = acciones.jefes()[0];
+    if (!jefe) return res.status(409).json({ ok: false, error: 'No hay jefe configurado' });
+    const r = await acciones.confirmar(p.id, jefe);
+    res.status(r.ok ? 200 : 409).json({ ok: r.ok, texto: r.texto });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 // ─── Órdenes para los agentes del Mac ────────────────────────────────────────
 
 /**
