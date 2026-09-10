@@ -156,8 +156,43 @@ function leerJefes() {
   return leer().jefes || [];
 }
 
+// Órdenes para los agentes que viven en el Mac.
+function guardarOrden(o) {
+  const e = leer();
+  e.ordenes = e.ordenes || {};
+  e.ordenes[o.id] = o;
+  const ids = Object.keys(e.ordenes);
+  if (ids.length > 100) {
+    ids.sort((a, b) => new Date(e.ordenes[a].creada) - new Date(e.ordenes[b].creada))
+      .slice(0, ids.length - 100).forEach(k => delete e.ordenes[k]);
+  }
+  guardar();
+}
+
+function leerOrden(id) { return (leer().ordenes || {})[id] || null; }
+function leerOrdenes() { return leer().ordenes || {}; }
+
+function actualizarOrden(id, campos) {
+  const e = leer();
+  if (e.ordenes && e.ordenes[id]) {
+    Object.assign(e.ordenes[id], campos);
+    guardar();
+  }
+}
+
+// El último lote de facturas emitido, para no emitirlo dos veces.
+function guardarLoteEmitido(periodo) {
+  const e = leer();
+  e.loteEmitido = { periodo, cuando: new Date().toISOString() };
+  guardar();
+}
+
+function leerLoteEmitido() { return leer().loteEmitido || null; }
+
 module.exports = {
   ARRANQUE, FICHERO,
+  guardarLoteEmitido, leerLoteEmitido,
+  guardarOrden, leerOrden, leerOrdenes, actualizarOrden,
   guardarJefes, leerJefes,
   guardarSilencio, leerSilencio,
   guardarPropuesta, leerPropuesta, marcarPropuestaHecha, borrarPropuesta,

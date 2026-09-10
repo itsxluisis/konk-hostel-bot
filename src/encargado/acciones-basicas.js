@@ -5,6 +5,7 @@
 
 const { registrar } = require('./acciones');
 const { AGENTES } = require('./config');
+const { plural } = require('./parte');
 const { hoyISO } = require('./reloj');
 const estado = require('./estado');
 const temas = require('./temas');
@@ -35,7 +36,7 @@ registrar('silenciar_avisos', {
         + ` Los que hay son: ${Object.keys(AGENTES).join(', ')}.` };
     }
     const n = Math.max(1, Math.min(30, Number(dias) || 1));
-    return `🔕 Callarme sobre ${nombreDe(agente)} durante ${n} día(s),`
+    return `🔕 Callarme sobre ${nombreDe(agente)} durante ${plural(n, 'día', 'días')},`
       + ` hasta el ${sumarDias(hoyISO(), n)}.`
       + `\nSeguirá corriendo igual: solo dejo de darte la lata si no lo hace.`;
   },

@@ -268,4 +268,52 @@ router.get('/quien-escribe', auth, (req, res) => {
   res.json({ ok: true, vistos: escucha.quienEscribe() });
 });
 
+// ─── Órdenes para los agentes del Mac ────────────────────────────────────────
+
+/**
+ * GET /encargado/ordenes?agente=facturador-konk
+ * El Mac pregunta si hay algo que hacer. Lo que devuelve queda marcado como
+ * entregado, para que dos sondeos seguidos no hagan lo mismo dos veces.
+ */
+router.get('/ordenes', auth, (req, res) => {
+  const ordenes = require('./ordenes');
+  const agente = req.query.agente;
+  if (!agente) return res.status(400).json({ ok: false, error: 'Falta ?agente=' });
+  res.json({ ok: true, ordenes: ordenes.recoger(String(agente)) });
+});
+
+/**
+ * POST /encargado/ordenes/:id/resultado
+ * El Mac cuenta cómo ha ido, y se publica en el grupo.
+ */
+router.post('/ordenes/:id/resultado', auth, async (req, res) => {
+  const ordenes = require('./ordenes');
+  const temas = require('./temas');
+  try {
+    const { ok = false, salida = '' } = req.body || {};
+    const o = ordenes.resultado(req.params.id, { ok, salida });
+
+    // Un lote emitido se apunta para que no pueda emitirse otra vez.
+    if (ok && o.tarea === 'emitir_lote' && o.args?.periodo) {
+      estado.guardarLoteEmitido(o.args.periodo);
+    }
+
+    const titulo = o.tarea === 'emitir_lote'
+      ? (ok ? '🧾 Lote emitido' : '❌ No se pudo emitir el lote')
+      : (ok ? '📋 Lote preparado' : '❌ No se pudo preparar el lote');
+    await send(`${titulo}\n\n${String(salida).slice(0, 3000)}`,
+      { threadId: temas.idDe('FACTURAS') });
+
+    res.json({ ok: true, orden: o });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+/** GET /encargado/ordenes/todas — las últimas, para mirar qué ha pasado. */
+router.get('/ordenes/todas', auth, (req, res) => {
+  const ordenes = require('./ordenes');
+  res.json({ ok: true, ordenes: ordenes.listar(), olvidadas: ordenes.olvidadas().length });
+});
+
 module.exports = router;
