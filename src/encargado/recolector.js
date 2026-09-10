@@ -48,6 +48,7 @@ async function recolectar(fecha = hoyISO()) {
     fecha,
     llegadas: [], salidas: [], enCasa: [],
     huespedes: 0,
+    cobros: null,
     agentes: [],
     fallos: [],
   };
@@ -83,6 +84,14 @@ async function recolectar(fecha = hoyISO()) {
     foto.huespedes = foto.enCasa.reduce((n, r) => n + r.personas, 0);
   } catch (err) {
     foto.fallos.push(`No se pudo calcular la ocupación: ${err.message}`);
+  }
+
+  // Estado del vigilante de cobros, que ahora vive en este mismo proceso.
+  // Carga perezosa y tolerante: si el módulo no está, el parte sigue saliendo.
+  try {
+    foto.cobros = require('../vigilante').info();
+  } catch (err) {
+    foto.cobros = null;
   }
 
   // Cómo va el equipo de agentes

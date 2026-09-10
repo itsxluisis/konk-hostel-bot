@@ -87,6 +87,16 @@ function parteDiario(foto, ahora = new Date()) {
     }
   }
 
+  // Cobros: solo se menciona si hay algo raro que contar.
+  const c = foto.cobros;
+  if (c) {
+    if (c.activo === false) {
+      lineas.push(``, `⚠️ El vigilante de cobros está apagado.`);
+    } else if (c.ultimaRevision && c.ultimaRevision !== foto.fecha) {
+      lineas.push(``, `💰 Cobros: la última revisión es del ${c.ultimaRevision}.`);
+    }
+  }
+
   // El equipo, solo si hay algo que decir.
   const pendientes = foto.agentes.filter(a => a.seEsperaHoy && !a.latioHoy);
   const fallidos = foto.agentes.filter(a => a.latioHoy && a.ok === false);

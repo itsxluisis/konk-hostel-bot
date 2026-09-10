@@ -165,5 +165,20 @@ t('el fijado tampoco da cifras falsas si faltan datos', () => {
   assert.ok(!txt.includes('14 huéspedes'), 'no debe dar una cifra que no puede confirmar');
 });
 
+t('el parte avisa si el vigilante de cobros está apagado', () => {
+  const foto = { ...lleno, cobros: { activo: false, ultimaRevision: null } };
+  assert.ok(parteDiario(foto, cuando).includes('apagado'));
+});
+
+t('el parte avisa si la última revisión de cobros no es de hoy', () => {
+  const foto = { ...lleno, cobros: { activo: true, ultimaRevision: '2026-09-08' } };
+  assert.ok(parteDiario(foto, cuando).includes('2026-09-08'));
+});
+
+t('si los cobros están al día, el parte no los menciona', () => {
+  const foto = { ...lleno, cobros: { activo: true, ultimaRevision: '2026-09-10' } };
+  assert.ok(!parteDiario(foto, cuando).includes('Cobros:'));
+});
+
 console.log(`\n${pasan} pasan · ${fallan} fallan\n`);
 process.exit(fallan ? 1 : 0);
