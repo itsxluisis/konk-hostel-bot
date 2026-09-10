@@ -86,9 +86,22 @@ function leerFijado() {
   return leer().fijado || null;
 }
 
+// Ids de los temas del grupo que hemos creado. Telegram no deja listarlos,
+// así que hay que recordarlos nosotros.
+function guardarTemas(mapa) {
+  const e = leer();
+  e.temas = { ...(e.temas || {}), ...mapa };
+  guardar();
+}
+
+function leerTemas() {
+  return leer().temas || {};
+}
+
 module.exports = {
   ARRANQUE, FICHERO,
   guardarFijado, leerFijado,
+  guardarTemas, leerTemas,
   registrarLatido, ultimoLatido, todosLosLatidos,
   yaAvisado, marcarAvisado,
 };

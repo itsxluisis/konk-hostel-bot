@@ -24,16 +24,7 @@ const AGENTES = {
   },
 };
 
-// Temas del grupo de Telegram. Se rellenan con los message_thread_id reales
-// cuando el grupo tenga los temas creados. Vacío = cae en General (como hoy).
-const TEMAS = {
-  ESTADO:   process.env.TG_TEMA_ESTADO   || null,
-  PARTE:    process.env.TG_TEMA_PARTE    || null,
-  ALERTAS:  process.env.TG_TEMA_ALERTAS  || null,
-  LLAMADAS: process.env.TG_TEMA_LLAMADAS || null,
-  COBROS:   process.env.TG_TEMA_COBROS   || null,
-  FACTURAS: process.env.TG_TEMA_FACTURAS || null,
-  PREGUNTAR: process.env.TG_TEMA_PREGUNTAR || null,
-};
+// Los temas del grupo viven en temas.js: se crean por API y sus ids se
+// guardan en disco, así que no pueden ser una constante leída del entorno.
 
-module.exports = { TZ, AGENTES, TEMAS };
+module.exports = { TZ, AGENTES };

@@ -3,7 +3,8 @@
 // en su ventana, avisa EL MISMO DÍA.
 'use strict';
 
-const { AGENTES, TEMAS } = require('./config');
+const { AGENTES } = require('./config');
+const temas = require('./temas');
 const { partes, aMinutos, humano } = require('./reloj');
 const estado = require('./estado');
 const { send } = require('../telegram');
@@ -82,7 +83,7 @@ async function revisar({ notificar = true } = {}) {
     ].join('\n');
 
     if (notificar) {
-      await send(texto, { threadId: TEMAS.ALERTAS });
+      await send(texto, { threadId: temas.idDe('ALERTAS') });
       estado.marcarAvisado(clave);
     }
     emitidas.push({ agente: id, texto });

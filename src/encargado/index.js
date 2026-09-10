@@ -26,4 +26,17 @@ function montar(app) {
   }
 }
 
-module.exports = { montar };
+/**
+ * El carril al que mandar un mensaje. Pensada para que el resto del
+ * servidor la use sin acoplarse al encargado: si algo falla aquí,
+ * devuelve null y el mensaje cae en General, como siempre.
+ */
+function hilo(clave) {
+  try {
+    return require('./temas').idDe(clave);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { montar, hilo };

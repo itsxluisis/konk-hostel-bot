@@ -4,7 +4,8 @@
 'use strict';
 
 const express = require('express');
-const { AGENTES, TEMAS } = require('./config');
+const { AGENTES } = require('./config');
+const temas = require('./temas');
 const { humano } = require('./reloj');
 const estado = require('./estado');
 const vigilancia = require('./vigilancia');
@@ -53,7 +54,7 @@ router.post('/latido', auth, async (req, res) => {
       ``,
       resumen || 'Sin detalle.',
     ].join('\n');
-    await send(texto, { threadId: TEMAS[cfg.tema] || TEMAS.ALERTAS });
+    await send(texto, { threadId: temas.idDe(cfg.tema) || temas.idDe('ALERTAS') });
   }
 
   res.json({ ok: true, registrado: l.ts });
@@ -194,6 +195,34 @@ router.post('/preguntar', auth, async (req, res) => {
     res.json({ ok: true, pregunta: p, respuesta: await cerebro.responder(p) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─── Temas del grupo ─────────────────────────────────────────────────────────
+
+/** GET /encargado/temas — qué carriles hay y a dónde va cada cosa. */
+router.get('/temas', auth, async (req, res) => {
+  try {
+    res.json({ ok: true, grupo: await temas.estadoDelGrupo(), carriles: temas.listar() });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.response?.data?.description || err.message,
+      carriles: temas.listar(),
+    });
+  }
+});
+
+/**
+ * POST /encargado/temas — crea los carriles que falten.
+ * ?rehacer=1 los crea todos de nuevo (deja los viejos huérfanos: usar con tino).
+ */
+router.post('/temas', auth, async (req, res) => {
+  try {
+    const r = await temas.crear({ soloFaltantes: req.query.rehacer !== '1' });
+    res.status(r.ok ? 200 : 409).json(r);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.response?.data?.description || err.message });
   }
 });
 

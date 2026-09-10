@@ -194,7 +194,8 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
   console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}`);
 
   try {
-    await sendTelegram(msg);
+    // Una incidencia de un huésped va al carril de alertas del grupo.
+    await sendTelegram(msg, { threadId: require('./encargado').hilo('ALERTAS') });
   } catch (err) {
     console.error('[report-incident] Error enviando a Telegram:', err.message);
   }
@@ -405,7 +406,8 @@ app.post('/vapi/assistant-config', (req, res) => {
       `💶 Coste: ${costeStr}\n` +
       `⏱️ Duración: ${durStr}\n` +
       `🕐 Cuándo: ${momento}\n` +
-      `📱 Tel: ${phone}`
+      `📱 Tel: ${phone}`,
+      { threadId: require('./encargado').hilo('LLAMADAS') }
     ).catch(console.error);
 
     return res.json({});

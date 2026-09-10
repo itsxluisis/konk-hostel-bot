@@ -3,7 +3,7 @@
 // mensaje de ESTADO fijado.
 'use strict';
 
-const { TEMAS } = require('./config');
+const temas = require('./temas');
 const { partes, aMinutos } = require('./reloj');
 const estado = require('./estado');
 const { recolectar } = require('./recolector');
@@ -30,7 +30,7 @@ async function refrescarEstado(foto) {
     }
   }
 
-  const msg = await send(texto, { threadId: TEMAS.ESTADO });
+  const msg = await send(texto, { threadId: temas.idDe('ESTADO') });
   if (!msg) return { accion: 'fallo', messageId: null };
   await pin(msg.message_id);
   estado.guardarFijado(msg.message_id);
@@ -43,7 +43,7 @@ async function emitirParte({ notificar = true } = {}) {
   const texto = parteDiario(foto);
   let enviado = null;
   if (notificar) {
-    enviado = await send(texto, { threadId: TEMAS.PARTE });
+    enviado = await send(texto, { threadId: temas.idDe('PARTE') });
     await refrescarEstado(foto);
   }
   return { foto, texto, enviado: Boolean(enviado) };

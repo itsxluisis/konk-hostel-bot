@@ -12,7 +12,7 @@
 'use strict';
 
 const axios = require('axios');
-const { TEMAS } = require('./config');
+const temas = require('./temas');
 const { responder } = require('./cerebro');
 const { send } = require('../telegram');
 
@@ -42,7 +42,8 @@ async function vaConmigo(msg) {
 
   // En el tema "Preguntar", todo va dirigido al encargado.
   const tema = String(msg.message_thread_id || '');
-  if (TEMAS.PREGUNTAR && tema === String(TEMAS.PREGUNTAR)) return true;
+  const elSuyo = temas.idDe('PREGUNTAR');
+  if (elSuyo && tema === String(elSuyo)) return true;
 
   // Mención explícita.
   const yo = await nombreDelBot();
@@ -92,7 +93,7 @@ async function procesar(update) {
   if (!await vaConmigo(msg)) return { accion: 'ignorado', motivo: 'no me hablaba a mí' };
 
   const pregunta = await limpiar(msg.text);
-  const hilo = msg.message_thread_id || TEMAS.PREGUNTAR || null;
+  const hilo = msg.message_thread_id || temas.idDe('PREGUNTAR') || null;
 
   if (!pregunta || /^(ayuda|help|start)$/i.test(pregunta)) {
     await send(AYUDA, { threadId: hilo });

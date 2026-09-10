@@ -256,6 +256,15 @@ function construir(hoy, a, pendientes) {
   return `KONK · vigilante de cobros — ${dd}/${m}/${y}\n\n${L.join('\n')}`;
 }
 
+/** El carril de Cobros del grupo, si existe. null = tema General. */
+function carrilCobros() {
+  try {
+    return require('./encargado').hilo('COBROS');
+  } catch {
+    return null;
+  }
+}
+
 // ─── latido al Encargado ─────────────────────────────────────────────────────
 /**
  * Avisa al Encargado de que el vigilante ha corrido. Carga perezosa y a prueba
@@ -306,7 +315,7 @@ async function ejecutar({ enviar = true, todo = false } = {}) {
     return { ...resumen, avisado: false, mensaje: null };
   }
   if (enviar) {
-    await sendTelegram(mensaje);
+    await sendTelegram(mensaje, { threadId: carrilCobros() });
     estado.ultimaRevision = hoy;
     guardarEstado(estado);   // solo se persiste si se envió
   }
@@ -332,7 +341,8 @@ function arrancar() {
       console.error('[Vigilante] ERROR:', e.message);
       latir(false, 'La revisión falló: ' + e.message, null);
       await sendTelegram('KONK · vigilante de cobros\n\n⚠️ La revisión de hoy falló: '
-        + e.message + '\nLos cobros NO se han comprobado.');
+        + e.message + '\nLos cobros NO se han comprobado.',
+        { threadId: carrilCobros() });
       const est = cargarEstado();
       est.ultimaRevision = fecha;   // no reintentar en bucle durante la hora
       guardarEstado(est);
