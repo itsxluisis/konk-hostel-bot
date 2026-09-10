@@ -7,6 +7,7 @@ const express = require('express');
 const { exchangeCode, getAvailability, getAuthUrl, getToken } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
+const vigilante = require('./vigilante');
 
 const path = require('path');
 const app = express();
@@ -331,12 +332,28 @@ app.get('/admin/reservations-today', vapiAuth, async (req, res) => {
   }
 });
 
+// ─── VIGILANTE DE COBROS ──────────────────────────────────────────────────────
+// Revisión manual. Sin ?enviar=1 solo devuelve lo que vería, no manda Telegram.
+app.get('/admin/vigilante', vapiAuth, async (req, res) => {
+  try {
+    const r = await vigilante.ejecutar({
+      enviar: req.query.enviar === '1',
+      todo: req.query.todo === '1',
+    });
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    console.error('[Vigilante] error manual:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     cloudbeds: !!process.env.CLOUDBEDS_REFRESH_TOKEN ? 'authorized' : 'pending_auth',
     telegram: !!process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'missing',
+    vigilante: process.env.VIGILANTE_OFF === '1' ? 'off' : 'on',
   });
 });
 
@@ -451,6 +468,7 @@ app.post('/vapi/assistant-config', (req, res) => {
 
 // ─── ARRANQUE ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 80;
+if (process.env.VIGILANTE_OFF !== '1') vigilante.arrancar();
 app.listen(PORT, () => {
   console.log(`
 ╔══════════════════════════════════════════════════════╗

@@ -262,4 +262,4 @@ async function getReservationsByDate(date) {
   }
 }
 
-module.exports = { exchangeCode, getAvailability, getAvailabilityDebug, getAuthUrl, getToken, getReservationsByDate };
+module.exports = { exchangeCode, getAvailability, getAvailabilityDebug, getAuthUrl, getToken, getReservationsByDate, api };
