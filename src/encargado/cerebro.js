@@ -11,6 +11,7 @@ const { CONSULTAS } = require('./consultas');
 const acciones = require('./acciones');
 require('./acciones-basicas');   // registra las acciones en el catálogo
 require('./acciones-facturas');
+require('./acciones-camas');
 const { hoyISO } = require('./reloj');
 
 const MODELO = process.env.ENCARGADO_MODELO || 'claude-haiku-4-5-20251001';

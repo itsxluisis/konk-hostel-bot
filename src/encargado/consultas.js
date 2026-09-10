@@ -132,6 +132,29 @@ async function porCanal({ canal, fecha } = {}) {
     + lineas.join('\n');
 }
 
+/** Qué camas hay en el Konk y cuáles están bloqueadas. */
+async function queCamasHay({ soloBloqueadas } = {}) {
+  const inventario = require('./inventario');
+  const r = await inventario.resumen();
+  const bloqueadas = (await inventario.camas()).filter(c => c.bloqueada);
+
+  if (soloBloqueadas || /^(s[ií]|true|1)$/i.test(String(soloBloqueadas || ''))) {
+    if (!bloqueadas.length) return '✅ No hay ninguna cama bloqueada.';
+    return `⛔ ${plural(bloqueadas.length, 'cama bloqueada', 'camas bloqueadas')}:\n`
+      + bloqueadas.map(c => `   · ${c.nombre} (${c.tipo})`).join('\n');
+  }
+
+  const lineas = r.grupos
+    .sort((a, b) => b.camas.length - a.camas.length)
+    .map(g => `   ${g.privada ? '🔒' : '👥'} ${g.tipo} — `
+      + `${plural(g.camas.length, 'unidad', 'unidades')}: ${g.camas.map(c => c.nombre).join(', ')}`);
+  const aviso = bloqueadas.length
+    ? `\n\n⛔ Bloqueadas ahora: ${bloqueadas.map(c => c.nombre).join(', ')}.`
+    : '';
+  return `🛏️ El Konk tiene ${plural(r.total, 'cama/habitación', 'camas/habitaciones')}:\n`
+    + lineas.join('\n') + aviso;
+}
+
 async function comoVaElEquipo() {
   const latidos = estado.todosLosLatidos();
   const lineas = Object.entries(AGENTES).map(([id, cfg]) => {
@@ -196,6 +219,13 @@ const CONSULTAS = {
       canal: 'Booking, Airbnb, Expedia, web, walk-in…',
       fecha: 'hoy, mañana, ayer o AAAA-MM-DD',
     },
+  },
+  que_camas_hay: {
+    fn: queCamasHay,
+    descripcion: 'El inventario del hostel: qué camas y habitaciones hay, cuáles'
+      + ' son privadas y cuáles compartidas, y cuáles están bloqueadas ahora mismo.'
+      + ' Úsala antes de bloquear o desbloquear, para saber el nombre exacto.',
+    parametros: { soloBloqueadas: 'pon "si" para listar solo las bloqueadas' },
   },
   como_va_el_equipo: {
     fn: comoVaElEquipo,
