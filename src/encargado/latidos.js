@@ -310,6 +310,17 @@ router.get('/cloudbeds/permisos', auth, async (req, res) => {
   }
 });
 
+/** GET /encargado/cloudbeds/camas — el inventario real, para poder bloquear. */
+router.get('/cloudbeds/camas', auth, async (req, res) => {
+  const { api } = require('../cloudbeds');
+  try {
+    const r = await api('GET', '/getRooms', {});
+    res.json({ ok: true, crudo: r });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
 // ─── Órdenes para los agentes del Mac ────────────────────────────────────────
 
 /**
