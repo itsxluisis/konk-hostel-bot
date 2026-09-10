@@ -60,4 +60,21 @@ async function edit(messageId, text) {
   }
 }
 
-module.exports = { send, edit };
+/** Fija un mensaje en el chat (o en su tema). Silencioso: no avisa a nadie. */
+async function pin(messageId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId || !messageId) return false;
+  try {
+    await axios.post(`https://api.telegram.org/bot${token}/pinChatMessage`,
+      { chat_id: chatId, message_id: Number(messageId), disable_notification: true });
+    return true;
+  } catch (err) {
+    // No poder fijar (falta de permisos) no debe romper nada.
+    console.warn('[Telegram] No se pudo fijar:',
+      err.response?.data?.description || err.message);
+    return false;
+  }
+}
+
+module.exports = { send, edit, pin };

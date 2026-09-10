@@ -53,6 +53,14 @@ const TX = [
 ];
 
 let enviados = [];
+let latidos = [];
+let romperEncargado = false;
+const fakeEstado = {
+  registrarLatido: (agente, datos) => {
+    if (romperEncargado) throw new Error('encargado caido');
+    latidos.push({ agente, ...datos });
+  },
+};
 const fakeCloudbeds = {
   api: async (method, ruta, params = {}) => {
     if (ruta === '/getReservations') {
@@ -86,6 +94,7 @@ const real = Module.prototype.require;
 Module.prototype.require = function (id) {
   if (id === './cloudbeds') return fakeCloudbeds;
   if (id === './telegram') return fakeTelegram;
+  if (id === './encargado/estado') return fakeEstado;
   return real.apply(this, arguments);
 };
 process.env.DATA_DIR = path.join(require('os').tmpdir(), 'vig-test-' + Date.now());
@@ -115,10 +124,24 @@ Module.prototype.require = real;
   assert.ok(m.includes('Anulado Sinrehacer'), 'si avisa de la anulacion sin rehacer');
   assert.strictEqual(r.importePendiente, 160, 'pendiente = 120 (R1) + 40 (R6)');
 
+  // el latido llega al Encargado, y en verde: encontrar algo no es un fallo suyo
+  assert.strictEqual(latidos.length, 1, 'manda exactamente un latido por revision');
+  assert.strictEqual(latidos[0].agente, 'vigilante-cobros', 'se identifica bien');
+  assert.strictEqual(latidos[0].ok, true, 'hallar incidencias NO es un fallo del vigilante');
+  assert.ok(latidos[0].resumen.includes('incidencia'), 'el resumen dice lo que encontro');
+
   // segunda pasada: sin --todo no debe repetir lo ya avisado
   enviados = [];
   const r2 = await vig.ejecutar({ enviar: true });
   assert.strictEqual(enviados.length, 0, 'no repite las mismas alarmas al dia siguiente');
+
+  // si el Encargado esta caido, la revision debe seguir funcionando igual
+  romperEncargado = true;
+  latidos = [];
+  const r3 = await vig.ejecutar({ enviar: true, todo: true });
+  assert.strictEqual(r3.escapados, 1, 'un Encargado caido no rompe la revision');
+  assert.strictEqual(latidos.length, 0, 'y el latido simplemente se pierde');
+  romperEncargado = false;
 
   console.log('  ✓ excluye Booking, Airbnb y Expedia');
   console.log('  ✓ detecta escapado, parcial y cobrado de mas');
@@ -127,5 +150,7 @@ Module.prototype.require = real;
   console.log('  ✓ bloqueo retroactivo si, del mismo dia no');
   console.log('  ✓ ignora el pasivo anterior a la fecha de corte');
   console.log('  ✓ no repite alarmas ya avisadas');
+  console.log('  ✓ manda latido al Encargado, en verde aunque halle incidencias');
+  console.log('  ✓ si el Encargado falla, la revision sigue funcionando');
   console.log('\nTODOS LOS TESTS PASAN');
 })().catch(e => { console.error('FALLO:', e.message); process.exit(1); });

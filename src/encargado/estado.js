@@ -74,8 +74,21 @@ function marcarAvisado(clave) {
   guardar();
 }
 
+// El mensaje de ESTADO fijado: guardamos su id para reescribirlo en sitio
+// en vez de llenar el chat de mensajes nuevos.
+function guardarFijado(messageId) {
+  const e = leer();
+  e.fijado = { messageId, desde: new Date().toISOString() };
+  guardar();
+}
+
+function leerFijado() {
+  return leer().fijado || null;
+}
+
 module.exports = {
   ARRANQUE, FICHERO,
+  guardarFijado, leerFijado,
   registrarLatido, ultimoLatido, todosLosLatidos,
   yaAvisado, marcarAvisado,
 };

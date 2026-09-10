@@ -10,11 +10,13 @@
 
 const router = require('./latidos');
 const vigilancia = require('./vigilancia');
+const agenda = require('./agenda');
 
 function montar(app) {
   try {
     app.use('/encargado', router);
     vigilancia.arrancar();
+    agenda.arrancar();
     console.log('🧑‍💼 Encargado del Konk montado en /encargado');
   } catch (err) {
     console.error('[Encargado] No se pudo montar (el resto sigue OK):', err.message);

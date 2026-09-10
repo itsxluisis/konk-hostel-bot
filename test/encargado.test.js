@@ -77,5 +77,93 @@ t('sí alerta si arrancamos ANTES del plazo el mismo día', () => {
   assert.strictEqual(r.alerta, true, r.motivo);
 });
 
+
+// ─────────── El parte diario ───────────
+const { estadoFijado, parteDiario, nombres, plural } = require('../src/encargado/parte');
+
+const cuando = new Date('2026-09-10T07:15:00Z');
+const vacio = { fecha: '2026-09-10', llegadas: [], salidas: [], enCasa: [],
+                huespedes: 0, agentes: [], fallos: [] };
+const lleno = {
+  fecha: '2026-09-10',
+  llegadas: [
+    { huesped: 'Cristina Pilar Fernandez', personas: 2, salida: '2026-09-11', origen: 'Booking' },
+    { huesped: 'Cristian Viadero', personas: 1, salida: '2026-09-14', origen: '' },
+  ],
+  salidas: [{ huesped: 'Manuel Cuesta', personas: 1, salida: '2026-09-10', origen: '' }],
+  enCasa: [], huespedes: 14,
+  agentes: [
+    { id: 'facturador-konk', nombre: 'Facturador Konk', seEsperaHoy: false, latioHoy: false, ok: null, resumen: null },
+    { id: 'vigilante-cobros', nombre: 'Vigilante de cobros', seEsperaHoy: true, latioHoy: true, ok: true, resumen: 'todo cuadra' },
+  ],
+  fallos: [],
+};
+
+console.log('\nEncargado · el parte diario\n');
+
+t('plural: singular y plural', () => {
+  assert.strictEqual(plural(1, 'huésped', 'huéspedes'), '1 huésped');
+  assert.strictEqual(plural(3, 'huésped', 'huéspedes'), '3 huéspedes');
+});
+
+t('nombres: recorta a partir del tope', () => {
+  const lista = 'ABCDEF'.split('').map(x => ({ huesped: `${x} Apellido` }));
+  assert.ok(nombres(lista, 4).endsWith('y 2 más'), nombres(lista, 4));
+});
+
+t('hostel vacío: lo dice con todas las letras', () => {
+  assert.ok(parteDiario(vacio, cuando).includes('vacío'));
+});
+
+t('parte con movimiento: nombres, personas y origen', () => {
+  const txt = parteDiario(lleno, cuando);
+  assert.ok(txt.includes('14 personas'), 'faltan los huéspedes');
+  assert.ok(txt.includes('Cristina Pilar Fernandez'), 'falta el nombre');
+  assert.ok(txt.includes('(Booking)'), 'falta el origen');
+  assert.ok(txt.includes('Manuel'), 'faltan las salidas');
+});
+
+t('el fijado es corto y lleva el semáforo del equipo', () => {
+  const txt = estadoFijado(lleno, cuando);
+  assert.ok(txt.split('\n').length <= 10, 'el fijado se ha alargado demasiado');
+  assert.ok(txt.includes('🤖'), 'falta el semáforo');
+  assert.ok(txt.includes('Vigilante de cobros ✅'), 'el vigilante debería salir en verde');
+  assert.ok(txt.includes('Facturador Konk —'), 'hoy no se le espera: guion');
+});
+
+t('un agente que no ha corrido sale como pendiente', () => {
+  const foto = { ...lleno, agentes: [
+    { nombre: 'Vigilante de cobros', seEsperaHoy: true, latioHoy: false, ok: null, resumen: null }] };
+  assert.ok(estadoFijado(foto, cuando).includes('⏳'));
+  assert.ok(parteDiario(foto, cuando).includes('Aún sin correr hoy'));
+});
+
+t('un agente en error se ve en el parte', () => {
+  const foto = { ...lleno, agentes: [
+    { nombre: 'Vigilante de cobros', seEsperaHoy: true, latioHoy: true, ok: false, resumen: 'la revisión falló' }] };
+  assert.ok(parteDiario(foto, cuando).includes('la revisión falló'));
+});
+
+t('si Cloudbeds falla, el parte lo confiesa en vez de mentir', () => {
+  const foto = { ...vacio, fallos: ['No se pudieron leer las llegadas: timeout'] };
+  const txt = parteDiario(foto, cuando);
+  assert.ok(txt.includes('No he podido consultarlo todo'), txt);
+  assert.ok(txt.includes('timeout'));
+});
+
+t('cero por no poder mirar NO se cuenta como hostel vacío', () => {
+  const foto = { ...vacio, fallos: ['No se pudo calcular la ocupación: timeout'] };
+  const txt = parteDiario(foto, cuando);
+  assert.ok(!txt.includes('está vacío'), 'no debe afirmar que está vacío');
+  assert.ok(txt.includes('no puedo darte el estado'), txt);
+});
+
+t('el fijado tampoco da cifras falsas si faltan datos', () => {
+  const foto = { ...lleno, fallos: ['timeout'] };
+  const txt = estadoFijado(foto, cuando);
+  assert.ok(txt.includes('Datos incompletos'), txt);
+  assert.ok(!txt.includes('14 huéspedes'), 'no debe dar una cifra que no puede confirmar');
+});
+
 console.log(`\n${pasan} pasan · ${fallan} fallan\n`);
 process.exit(fallan ? 1 : 0);

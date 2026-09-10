@@ -256,6 +256,20 @@ function construir(hoy, a, pendientes) {
   return `KONK · vigilante de cobros — ${dd}/${m}/${y}\n\n${L.join('\n')}`;
 }
 
+// ─── latido al Encargado ─────────────────────────────────────────────────────
+/**
+ * Avisa al Encargado de que el vigilante ha corrido. Carga perezosa y a prueba
+ * de fallos a propósito: un hook de monitorización jamás debe poder tumbar lo
+ * que monitoriza, y el módulo del Encargado puede no estar montado.
+ */
+function latir(ok, resumen, detalle) {
+  try {
+    require('./encargado/estado').registrarLatido('vigilante-cobros', { ok, resumen, detalle });
+  } catch (e) {
+    console.warn('[Vigilante] no se pudo registrar el latido:', e.message);
+  }
+}
+
 // ─── ejecución ───────────────────────────────────────────────────────────────
 async function ejecutar({ enviar = true, todo = false } = {}) {
   const { fecha: hoy } = ahoraMadrid();
@@ -288,6 +302,7 @@ async function ejecutar({ enviar = true, todo = false } = {}) {
   if (!mensaje) {
     estado.ultimaRevision = hoy;
     guardarEstado(estado);
+    latir(true, 'Sin incidencias: todos los cobros cuadran.', resumen);
     return { ...resumen, avisado: false, mensaje: null };
   }
   if (enviar) {
@@ -295,6 +310,12 @@ async function ejecutar({ enviar = true, todo = false } = {}) {
     estado.ultimaRevision = hoy;
     guardarEstado(estado);   // solo se persiste si se envió
   }
+  // El vigilante hizo su trabajo: encontrar algo NO es un fallo suyo. Latido en
+  // verde con el detalle; de las alarmas ya avisa él por su cuenta.
+  const n = resumen.escapados + resumen.parciales + resumen.dobles
+    + resumen.anulaciones + resumen.bloqueos;
+  latir(true, `${n} incidencia(s)` + (resumen.importePendiente
+    ? ` · ${eur(resumen.importePendiente)} pendiente` : ''), resumen);
   return { ...resumen, avisado: enviar, mensaje };
 }
 
@@ -309,6 +330,7 @@ function arrancar() {
       await ejecutar({ enviar: true });
     } catch (e) {
       console.error('[Vigilante] ERROR:', e.message);
+      latir(false, 'La revisión falló: ' + e.message, null);
       await sendTelegram('KONK · vigilante de cobros\n\n⚠️ La revisión de hoy falló: '
         + e.message + '\nLos cobros NO se han comprobado.');
       const est = cargarEstado();

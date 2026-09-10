@@ -8,6 +8,7 @@ const { AGENTES, TEMAS } = require('./config');
 const { humano } = require('./reloj');
 const estado = require('./estado');
 const vigilancia = require('./vigilancia');
+const agenda = require('./agenda');
 const { send } = require('../telegram');
 
 const router = express.Router();
@@ -86,6 +87,29 @@ router.post('/revisar', auth, async (req, res) => {
   const seco = req.query.seco === '1' || req.body?.seco === true;
   const alertas = await vigilancia.revisar({ notificar: !seco });
   res.json({ ok: true, seco, alertas });
+});
+
+/**
+ * POST /encargado/parte
+ * Genera el parte del día. Con ?seco=1 lo devuelve sin enviarlo a Telegram,
+ * que es como se prueba sin molestar a nadie.
+ */
+router.post('/parte', auth, async (req, res) => {
+  const seco = req.query.seco === '1' || req.body?.seco === true;
+  try {
+    const r = await agenda.emitirParte({ notificar: !seco });
+    res.json({
+      ok: true, seco, enviado: r.enviado, texto: r.texto,
+      datos: {
+        huespedes: r.foto.huespedes,
+        llegadas: r.foto.llegadas.length,
+        salidas: r.foto.salidas.length,
+        fallos: r.foto.fallos,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 module.exports = router;
