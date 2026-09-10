@@ -32,6 +32,32 @@ async function reservas(params) {
  * Foto del Konk para una fecha (por defecto hoy, hora de Madrid).
  * Devuelve siempre un objeto; los fallos van en .fallos.
  */
+/** Nombre comparable: sin tildes, sin mayúsculas, sin orden. */
+function clave(huesped) {
+  return (huesped || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().split(/\s+/).filter(Boolean).sort().join(' ');
+}
+
+/**
+ * En un hostel es corriente que alguien alargue la estancia y el PMS lo
+ * registre como reserva nueva: sale hoy y entra hoy. Contarlo como una
+ * salida y una llegada infla el parte y engaña. Se separan aparte.
+ */
+function separarProrrogas(foto) {
+  const entran = new Map(foto.llegadas.map(r => [clave(r.huesped), r]));
+  const prorrogas = [];
+  foto.salidas = foto.salidas.filter(sale => {
+    const entra = entran.get(clave(sale.huesped));
+    if (!entra) return true;
+    prorrogas.push({ huesped: sale.huesped, hasta: entra.salida, personas: entra.personas });
+    return false;
+  });
+  const siguen = new Set(prorrogas.map(p => clave(p.huesped)));
+  foto.llegadas = foto.llegadas.filter(r => !siguen.has(clave(r.huesped)));
+  foto.prorrogas = prorrogas;
+}
+
 /**
  * Deja constancia si la API devolvió cosas que no cumplían el filtro:
  * es la señal de que Cloudbeds está ignorando un parámetro.
@@ -46,7 +72,7 @@ function apuntarDescartes(foto, que, recibidas, validas) {
 async function recolectar(fecha = hoyISO()) {
   const foto = {
     fecha,
-    llegadas: [], salidas: [], enCasa: [],
+    llegadas: [], salidas: [], enCasa: [], prorrogas: [],
     huespedes: 0,
     cobros: null,
     agentes: [],
@@ -86,6 +112,8 @@ async function recolectar(fecha = hoyISO()) {
     foto.fallos.push(`No se pudo calcular la ocupación: ${err.message}`);
   }
 
+  separarProrrogas(foto);
+
   // Estado del vigilante de cobros, que ahora vive en este mismo proceso.
   // Carga perezosa y tolerante: si el módulo no está, el parte sigue saliendo.
   try {
@@ -111,4 +139,4 @@ async function recolectar(fecha = hoyISO()) {
   return foto;
 }
 
-module.exports = { recolectar };
+module.exports = { recolectar, separarProrrogas, clave };

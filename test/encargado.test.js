@@ -180,5 +180,45 @@ t('si los cobros están al día, el parte no los menciona', () => {
   assert.ok(!parteDiario(foto, cuando).includes('Cobros:'));
 });
 
+// ─────────── Prórrogas ───────────
+const { separarProrrogas, clave } = require('../src/encargado/recolector');
+
+console.log('\nEncargado · quien alarga la estancia no se ha ido\n');
+
+t('quien sale y entra el mismo día es una prórroga, no dos movimientos', () => {
+  const foto = {
+    llegadas: [{ huesped: 'Cristian Viadero', salida: '2026-09-14', personas: 1 },
+               { huesped: 'Judith Aguilera', salida: '2026-09-12', personas: 4 }],
+    salidas: [{ huesped: 'Cristian Viadero', salida: '2026-09-10' },
+              { huesped: 'María Mendieta', salida: '2026-09-10' }],
+  };
+  separarProrrogas(foto);
+  assert.deepStrictEqual(foto.llegadas.map(r => r.huesped), ['Judith Aguilera']);
+  assert.deepStrictEqual(foto.salidas.map(r => r.huesped), ['María Mendieta']);
+  assert.strictEqual(foto.prorrogas.length, 1);
+  assert.strictEqual(foto.prorrogas[0].hasta, '2026-09-14');
+});
+
+t('el nombre se compara sin tildes ni orden', () => {
+  assert.strictEqual(clave('María Mendieta'), clave('mendieta maria'));
+  assert.notStrictEqual(clave('Ana Gil'), clave('Ana Gomez'));
+});
+
+t('sin coincidencias no inventa prórrogas', () => {
+  const foto = { llegadas: [{ huesped: 'Ana Gil', salida: '2026-09-12', personas: 1 }],
+                 salidas: [{ huesped: 'Luis Paz', salida: '2026-09-10' }] };
+  separarProrrogas(foto);
+  assert.strictEqual(foto.prorrogas.length, 0);
+  assert.strictEqual(foto.llegadas.length, 1);
+  assert.strictEqual(foto.salidas.length, 1);
+});
+
+t('el parte cuenta las prórrogas aparte', () => {
+  const foto = { ...lleno, prorrogas: [{ huesped: 'Cristian Viadero', hasta: '2026-09-14', personas: 1 }] };
+  const txt = parteDiario(foto, cuando);
+  assert.ok(txt.includes('Se quedan más días'), txt);
+  assert.ok(txt.includes('2026-09-14'));
+});
+
 console.log(`\n${pasan} pasan · ${fallan} fallan\n`);
 process.exit(fallan ? 1 : 0);

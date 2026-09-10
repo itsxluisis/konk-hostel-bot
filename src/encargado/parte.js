@@ -38,6 +38,8 @@ function estadoFijado(foto, ahora = new Date()) {
 
   if (l) lineas.push(`   Llegan: ${nombres(foto.llegadas)}`);
   if (s) lineas.push(`   Salen: ${nombres(foto.salidas)}`);
+  const pr = (foto.prorrogas || []).length;
+  if (pr) lineas.push(`   Prorrogan: ${nombres(foto.prorrogas)}`);
 
   lineas.push(``, resumenAgentes(foto.agentes));
 
@@ -84,6 +86,12 @@ function parteDiario(foto, ahora = new Date()) {
     if (foto.salidas.length) {
       lineas.push(``, `📤 Salen ${plural(foto.salidas.length, 'reserva', 'reservas')}:`
         + ` ${nombres(foto.salidas, 8)}`);
+    }
+    if (foto.prorrogas && foto.prorrogas.length) {
+      lineas.push(``, `🔁 Se quedan más días (reserva nueva, no se van):`);
+      foto.prorrogas.slice(0, 8).forEach(p => {
+        lineas.push(`   · ${p.huesped} — hasta el ${p.hasta}`);
+      });
     }
   }
 
