@@ -177,6 +177,8 @@ router.get('/escucha', auth, async (req, res) => {
     res.json({
       ok: true,
       cerebro: cerebro.hayCerebro() ? cerebro.MODELO : 'sin ANTHROPIC_API_KEY (modo palabras clave)',
+      modo: process.env.ENCARGADO_ESCUCHA || 'sondeo',
+      sondeo: escucha.estadoSondeo(),
       webhook: await escucha.estadoEscucha(),
     });
   } catch (err) {

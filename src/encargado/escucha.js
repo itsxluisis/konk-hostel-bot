@@ -129,4 +129,81 @@ async function estadoEscucha() {
   return data.result || {};
 }
 
-module.exports = { procesar, registrar, estadoEscucha, vaConmigo, limpiar, AYUDA };
+// ─── sondeo (alternativa al webhook) ─────────────────────────────────────────
+// Telegram no consigue resolver el dominio de EasyPanel, así que en vez de
+// esperar a que nos avise, preguntamos nosotros. Es el mismo mecanismo que
+// usa cualquier bot detrás de un NAT: una conexión larga que se queda
+// esperando a que haya algo. Ni DNS, ni certificados, ni puertos.
+let sondeando = false;
+let ultimoUpdate = 0;
+let ultimoLatidoSondeo = null;
+
+async function unaVuelta() {
+  const t = process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return 0;
+  const { data } = await axios.get(`https://api.telegram.org/bot${t}/getUpdates`, {
+    params: {
+      offset: ultimoUpdate ? ultimoUpdate + 1 : undefined,
+      timeout: 30,                       // Telegram espera hasta 30 s si no hay nada
+      allowed_updates: JSON.stringify(['message']),
+    },
+    timeout: 40000,
+  });
+  const updates = data.result || [];
+  for (const u of updates) {
+    ultimoUpdate = Math.max(ultimoUpdate, u.update_id);
+    try {
+      const r = await procesar(u);
+      if (r.accion !== 'ignorado') console.log('[Encargado] Telegram:', JSON.stringify(r));
+    } catch (err) {
+      console.error('[Encargado] Fallo procesando un mensaje:', err.message);
+    }
+  }
+  ultimoLatidoSondeo = new Date().toISOString();
+  return updates.length;
+}
+
+/**
+ * Arranca el sondeo. Se reintenta solo: un fallo de red no debe dejar
+ * al encargado sordo para siempre.
+ */
+function arrancarSondeo() {
+  if (sondeando) return;
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
+    console.warn('[Encargado] Sin TELEGRAM_BOT_TOKEN: el encargado no escucha.');
+    return;
+  }
+  sondeando = true;
+  console.log('👂 Encargado escuchando Telegram por sondeo');
+
+  (async function bucle() {
+    let fallos = 0;
+    for (;;) {
+      try {
+        await unaVuelta();
+        fallos = 0;
+      } catch (err) {
+        fallos++;
+        const desc = err.response?.data?.description || err.message;
+        // 409 = hay un webhook puesto; el sondeo y el webhook se estorban.
+        if (err.response?.status === 409) {
+          console.error('[Encargado] Sondeo en conflicto con un webhook activo:', desc);
+          sondeando = false;
+          return;
+        }
+        console.error(`[Encargado] Sondeo falló (${fallos}):`, desc);
+        // Espera creciente, con tope de un minuto.
+        await new Promise(r => setTimeout(r, Math.min(60000, 2000 * fallos)));
+      }
+    }
+  })();
+}
+
+function estadoSondeo() {
+  return { activo: sondeando, ultimoUpdate, ultimaVuelta: ultimoLatidoSondeo };
+}
+
+module.exports = {
+  procesar, registrar, estadoEscucha, vaConmigo, limpiar, AYUDA,
+  arrancarSondeo, estadoSondeo,
+};
