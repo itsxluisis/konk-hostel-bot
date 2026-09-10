@@ -9,6 +9,8 @@ const { humano } = require('./reloj');
 const estado = require('./estado');
 const vigilancia = require('./vigilancia');
 const agenda = require('./agenda');
+const escucha = require('./escucha');
+const cerebro = require('./cerebro');
 const { send } = require('../telegram');
 
 const router = express.Router();
@@ -115,6 +117,79 @@ router.post('/parte', auth, async (req, res) => {
         detalle: seco ? { llegadas: r.foto.llegadas, salidas: r.foto.salidas } : undefined,
       },
     });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─── Escucha de Telegram (F2) ────────────────────────────────────────────────
+
+/** El secreto con el que Telegram firma cada aviso. */
+function secretoTelegram() {
+  return process.env.ENCARGADO_TG_SECRET
+    || process.env.ENCARGADO_SECRET
+    || process.env.VAPI_SECRET;
+}
+
+/**
+ * POST /encargado/telegram
+ * Aquí avisa Telegram cuando alguien escribe en el grupo. No lleva nuestra
+ * autenticación normal: Telegram no la conoce. Firma con su propia cabecera.
+ *
+ * Siempre se responde 200, incluso si algo falla: si devolvemos error,
+ * Telegram reintenta en bucle y acaba desactivando el webhook.
+ */
+router.post('/telegram', async (req, res) => {
+  const firma = req.headers['x-telegram-bot-api-secret-token'];
+  if (!secretoTelegram() || firma !== secretoTelegram()) {
+    // Ni pistas a quien llame a esta puerta sin la llave.
+    return res.status(401).json({ ok: false });
+  }
+  res.json({ ok: true });   // se contesta ya; el trabajo va después
+
+  try {
+    const r = await escucha.procesar(req.body);
+    if (r.accion !== 'ignorado') console.log('[Encargado] Telegram:', JSON.stringify(r));
+  } catch (err) {
+    console.error('[Encargado] Fallo procesando Telegram:', err.message);
+  }
+});
+
+/**
+ * POST /encargado/registrar-escucha
+ * Le dice a Telegram dónde avisarnos. Se llama una vez.
+ * Body opcional: { url } — si no, se deduce de la petición.
+ */
+router.post('/registrar-escucha', auth, async (req, res) => {
+  try {
+    const base = req.body?.url
+      || `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
+    const r = await escucha.registrar(base, secretoTelegram());
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.response?.data?.description || err.message });
+  }
+});
+
+/** GET /encargado/escucha — cómo está la oreja y si hay cerebro. */
+router.get('/escucha', auth, async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      cerebro: cerebro.hayCerebro() ? cerebro.MODELO : 'sin ANTHROPIC_API_KEY (modo palabras clave)',
+      webhook: await escucha.estadoEscucha(),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** POST /encargado/preguntar — probar una pregunta sin pasar por Telegram. */
+router.post('/preguntar', auth, async (req, res) => {
+  const p = req.body?.pregunta || req.query.q;
+  if (!p) return res.status(400).json({ ok: false, error: 'Falta la pregunta' });
+  try {
+    res.json({ ok: true, pregunta: p, respuesta: await cerebro.responder(p) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
