@@ -103,6 +103,35 @@ async function buscarHuesped({ nombre } = {}) {
     + (hit.length > 10 ? `\n   … y ${hit.length - 10} más` : '');
 }
 
+/**
+ * Quién viene de un canal concreto: "el de Airbnb", "los de Booking",
+ * "los que reservaron por la web".
+ */
+async function porCanal({ canal, fecha } = {}) {
+  if (!canal || canal.trim().length < 3) {
+    return 'Dime de qué canal: Booking, Airbnb, Expedia, la web o walk-in.';
+  }
+  const f = resolverFecha(fecha);
+  const foto = await recolectar(f);
+  const q = canal.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // "web" y "directo" son la misma cosa en Cloudbeds.
+  const alias = /web|directo|propia/.test(q) ? 'website' : q;
+  const dentro = foto.enCasa.filter(r =>
+    (r.origen || '').toLowerCase().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').includes(alias));
+  if (!dentro.length) {
+    const canales = [...new Set(foto.enCasa.map(r => r.origen).filter(Boolean))];
+    return `El ${f} no hay nadie de "${canal}".`
+      + (canales.length ? ` Los canales de ese día son: ${canales.join(', ')}.` : '');
+  }
+  const lineas = dentro
+    .sort((a, b) => a.salida.localeCompare(b.salida))
+    .map(r => `   · ${r.huesped} — ${plural(r.personas, 'persona', 'personas')},`
+      + ` del ${r.entrada} al ${r.salida} (${r.origen})`);
+  return `🔗 El ${f} hay ${plural(dentro.length, 'reserva', 'reservas')} de "${canal}":\n`
+    + lineas.join('\n');
+}
+
 async function comoVaElEquipo() {
   const latidos = estado.todosLosLatidos();
   const lineas = Object.entries(AGENTES).map(([id, cfg]) => {
@@ -157,6 +186,16 @@ const CONSULTAS = {
     fn: buscarHuesped,
     descripcion: 'Busca las reservas de una persona por su nombre.',
     parametros: { nombre: 'nombre o apellido del huésped' },
+  },
+  por_canal: {
+    fn: porCanal,
+    descripcion: 'Quién está alojado en una fecha viniendo de un canal concreto'
+      + ' (Booking, Airbnb, Expedia, la web, walk-in). Úsala para preguntas como'
+      + ' "el de Airbnb" o "los de Booking". Si no encuentra el canal, dice cuáles hay.',
+    parametros: {
+      canal: 'Booking, Airbnb, Expedia, web, walk-in…',
+      fecha: 'hoy, mañana, ayer o AAAA-MM-DD',
+    },
   },
   como_va_el_equipo: {
     fn: comoVaElEquipo,
