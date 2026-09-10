@@ -385,6 +385,255 @@ Si no hay `ANTHROPIC_API_KEY`, el `modo` es `"palabras_clave"` y funciona igual,
 
 **Sobre `ANTHROPIC_API_KEY`:** si no está definida, el Encargado sigue funcionando en modo "palabras clave" (empareja por keywords de la pregunta y devuelve los datos igual), solo que sin conversación natural con Claude.
 
+---
+
+## Acciones con confirmación — F3
+
+### Qué es F3
+
+El Encargado puede **proponer** acciones que modifiquen datos (re-ejecutar facturador, cambiar estado de reserva, silenciar avisos, etc.), pero **nunca se ejecutan solas**. Siempre se propone, se muestra en cristiano lo que va a pasar, y se ejecuta solo cuando Luis pulsa un botón en Telegram.
+
+### Cómo funciona
+
+1. **Claude propone una acción** (o alguien llama a `POST /encargado/acciones/:nombre`).
+2. **Código genera la propuesta** (nunca modelo) — texto que explica qué pasará, sin dejar ambigüedad.
+3. **Mensaje en Telegram con botones** — "Confirmar" / "Cancelar".
+4. **Luis elige** (solo su id de Telegram puede confirmar).
+5. **Se ejecuta solo si es confirmada**.
+6. **Resultado se notifica** en el tema correspondiente.
+
+### Salvaguardas (corazón de F3)
+
+1. **Solo el jefe confirma.** Se verifica el `id` de Telegram del que pulsa el botón contra `ENCARGADO_JEFE_ID` (ids separados por coma, o configurados vía `POST /encargado/jefe`). Quien no sea el jefe recibe un aviso discreto y nada pasa.
+2. **Sin jefe configurado no manda nadie.** La postura segura es la de por defecto: si `ENCARGADO_JEFE_ID` no está definido, el botón no funciona.
+3. **Las propuestas caducan** a los 30 minutos (`ENCARGADO_VIDA_PROPUESTA`). Pasado ese tiempo, los botones no funcionan.
+4. **No se ejecuta dos veces:** la propuesta se marca como hecha **ANTES** de ejecutar; si algo peta a medias, no se repite sola.
+5. **El texto de confirmación lo escribe el código, no el modelo.** Cuando Claude pide una acción se corta el bucle y se devuelve la propuesta tal cual: lo que se va a ejecutar no puede depender de cómo lo parafrasee el modelo.
+6. **Las acciones se ofrecen al modelo con prefijo `hacer_`** para que quede claro que eso no es mirar, es tocar.
+
+### Acciones soportadas (en las fases de implementación)
+
+**Acciones sin riesgo** (ejecutan de inmediato tras confirmar):
+- `silenciar_avisos` — no alertar a Telegram de nuevos eventos hasta reactivar.
+- `reactivar_avisos` — volver a alertar.
+- `revisar_cobros_y_avisar` — lanzar ahora una revisión de cobros (sin esperar a las 09:00).
+
+**Acciones de riesgo medio** (ejecutan pero marcadas visiblemente):
+- `preparar_lote` — pre-calcular qué se va a facturar (lunes próximo) sin numerarlas aún. Muestra en la propuesta: cuántas reservas, período de fechas, total EUR.
+
+**Acciones de riesgo alto** (requieren confirmación en el mensaje):
+- `emitir_lote` — **ejecuta las facturas de verdad**. La propuesta muestra exactamente qué se va a numerar. Riesgo declarado: las facturas se numeran de verdad y eso no se deshace. La propuesta incluye un aviso destacado sobre esto.
+
+### El puente con el Mac
+
+El facturador vive en el Mac de Luis; el servidor está en la nube. La nube no puede entrar en el Mac, así que se hace al revés:
+
+1. **Mac pregunta cada 5 minutos** — solicita al servidor si hay órdenes de trabajo.
+2. **Servidor entrega una cola** — nombres de tarea de una **lista cerrada** (`facturador-konk`, `vigilante-cobros`, etc.).
+3. **Mac ejecuta lo que le toca** — busca el nombre en su diccionario `TAREAS` y ejecuta el comando correspondiente.
+4. **Resultado vuelve** — mac envía `POST /encargado/ordenes/:id/resultado` con `{"ok": true, "salida": "..."}`.
+5. **Publicación en Telegram** — resultado sale en el tema `TG_TEMA_FACTURAS`.
+
+**Protección:** por el puente solo viajan nombres de una lista cerrada, nunca comandos. Aunque alguien pirateara el servidor, no podría ejecutar nada fuera de esa lista en el Mac.
+
+**Caducidad:** una orden sin recoger en 24 horas caduca (`ENCARGADO_VIDA_ORDEN`). Evita emitir facturas con mucho desfase si el Mac estuvo apagado demasiado tiempo.
+
+**Marca de entrega:** un lote emitido queda apuntado (`loteEmitido` en el estado) para que no se pueda emitir dos veces en el mismo ciclo.
+
+### Endpoints nuevos
+
+#### `GET /encargado/acciones`
+
+Qué sabe hacer el Encargado, riesgo de cada acción, y si hay jefe configurado.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "jefe_configurado": true,
+  "jefe_ids": [123456789],
+  "acciones": [
+    {
+      "nombre": "silenciar_avisos",
+      "riesgo": "bajo",
+      "descripcion": "Pausar alertas a Telegram hasta reactivar"
+    },
+    {
+      "nombre": "emitir_lote",
+      "riesgo": "alto",
+      "descripcion": "Numerar y emitir facturas (irreversible)"
+    }
+  ]
+}
+```
+
+#### `POST /encargado/acciones/:nombre`
+
+Propone una acción. Con `?ejecutar=1`, intenta ejecutarla de inmediato (requiere el secreto del servidor, no debilita seguridad porque quien tiene ese secreto ya controla el backend).
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Query parameters:**
+- `ejecutar` (opcional) — si es `1`, ejecuta la acción sin esperar confirmación (administrativo).
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "propuesta_id": "acc_abc123def456",
+  "nombre": "emitir_lote",
+  "riesgo": "alto",
+  "texto_confirmacion": "Se van a numerar 5 facturas del período 2026-09-02 al 2026-09-08, total 1.250 EUR. Esto no se puede deshacer.",
+  "estado": "pendiente_confirmacion",
+  "caduca_en_minutos": 30,
+  "mensaje_telegram": "..."
+}
+```
+
+Si `ejecutar=1`:
+```json
+{
+  "ok": true,
+  "estado": "ejecutada",
+  "resultado": "5 facturas emitidas"
+}
+```
+
+#### `POST /encargado/jefe`
+
+Configura el id (o ids) de Telegram de quien puede confirmar acciones.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Body:**
+```json
+{
+  "ids": [123456789, 987654321]
+}
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "jefe_ids": [123456789, 987654321]
+}
+```
+
+#### `GET /encargado/quien-escribe`
+
+Devuelve los ids de Telegram que el Encargado ha visto escribir en el grupo. Útil para descubrir el id del jefe sin adivinarlo.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "usuarios_vistos": [
+    { "id": 123456789, "nombre": "Luis", "ultima_vez": "2026-09-10T10:30:00Z", "es_jefe": true },
+    { "id": 987654321, "nombre": "María", "ultima_vez": "2026-09-10T09:15:00Z", "es_jefe": false }
+  ]
+}
+```
+
+#### `GET /encargado/ordenes?agente=facturador-konk`
+
+Lo que el Mac puede recoger en su próximo sondeo (cada 5 minutos).
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "agente": "facturador-konk",
+  "ordenes": [
+    {
+      "id": "ord_xyz789",
+      "tarea": "emitir_lote",
+      "parametros": { "fecha_inicio": "2026-09-02", "fecha_fin": "2026-09-08" },
+      "creada": "2026-09-10T09:30:00Z"
+    }
+  ]
+}
+```
+
+#### `POST /encargado/ordenes/:id/resultado`
+
+El Mac reporta lo que hizo.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Body:**
+```json
+{
+  "ok": true,
+  "salida": "Emitidas 5 facturas: KH26-558 a KH26-562, total 1.250 EUR"
+}
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "id": "ord_xyz789",
+  "marcada_como_entregada": true,
+  "enviado_a_telegram": true
+}
+```
+
+#### `GET /encargado/ordenes/todas`
+
+Resumen de todas las órdenes y caducidades.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "total_ordenes": 15,
+  "pendientes_recogida": 2,
+  "caducadas_sin_recoger": 1,
+  "entregadas": 12,
+  "ultimas": [
+    { "id": "ord_xyz789", "tarea": "emitir_lote", "estado": "entregada", "creada": "2026-09-10T09:30:00Z" }
+  ]
+}
+```
+
+### Variables de entorno nuevas
+
+| Variable | Descripción | Default |
+|---|---|---|
+| `ENCARGADO_JEFE_ID` | IDs de Telegram de quien confirma (separados por coma) | Sin valor (sin jefe = no se ejecuta nada) |
+| `ENCARGADO_VIDA_PROPUESTA` | Minutos que vive una propuesta antes de caducar | 30 |
+| `ENCARGADO_VIDA_ORDEN` | Horas que vive una orden antes de caducarse si el Mac no la recoge | 24 |
+
 ## Archivos
 
 ### Vigilancia de latidos (F0)
@@ -420,10 +669,44 @@ Si no hay `ANTHROPIC_API_KEY`, el `modo` es `"palabras_clave"` y funciona igual,
 
 - `src/encargado/escucha.js` — el webhook de Telegram. Valida firma, filtra chat y contexto, desambigua la pregunta y llama al cerebro.
 
+### Acciones con confirmación (F3)
+
+- `src/encargado/acciones.js` — motor de acciones: `proponer(nombre, parametros)` genera una propuesta JSON con id único, texto de confirmación (escrito en código, nunca por modelo), y botones para Telegram. `confirmar(propuesta_id, id_usuario)` verifica que sea el jefe, marca como entregada antes de ejecutar, y devuelve el resultado. `cancelar(propuesta_id)` anula una propuesta pendiente. También exporta `botones()` y `mensaje()` para formatear en Telegram.
+
+- `src/encargado/acciones-basicas.js` — implementación de acciones sin riesgo:
+  - `silenciar_avisos(parametros)` — pausar alertas del Encargado a Telegram hasta reactivar.
+  - `reactivar_avisos(parametros)` — volver a alertar.
+  - `revisar_cobros_y_avisar(parametros)` — lanzar una revisión de cobros ahora (sin esperar a las 09:00) y devolver lo encontrado.
+
+- `src/encargado/acciones-facturas.js` — acciones sobre facturación:
+  - `preparar_lote(parametros)` — pre-calcular lote (fecha inicio, fecha fin) sin numerarlas. Devuelve propuesta con: cuántas reservas, período, total EUR. Riesgo **medio**.
+  - `emitir_lote(parametros)` — **ejecutar** las facturas de verdad, numerarlas y notificar al Mac. Riesgo **alto**: las facturas se numeran y eso no se deshace. El Mac es quien las genera de verdad; en `emitir_lote()` se crea la orden y se espera el resultado del Mac.
+
+- `src/encargado/ordenes.js` — cola de encargos para agentes locales. Funciones:
+  - `crear_orden(tarea, parametros)` — añade a la cola una orden con nombre de tarea cerrado.
+  - `leer_ordenes_pendientes(agente)` — el Mac consulta cada 5 min.
+  - `marcar_entregada(orden_id)` — después que el Mac hace el trabajo.
+  - `reportar_resultado(orden_id, ok, salida)` — Mac manda resultados.
+  - `limpiar_caducadas()` — rutina interna cada 10 min para purgar órdenes de >24 horas.
+  - `get_todas()` — para diagnosticar.
+
 ### Tests
 
 - `test/encargado.test.js` — 27 casos para F0 y F1; ejecutar con `node test/encargado.test.js`.
 - `test/escucha.test.js` — 18 casos para F2 (validación de webhook, autenticación, filtro de chat/contexto, elección de consulta); ejecutar con `node test/escucha.test.js`.
+- `test/acciones.test.js` — 12 casos para F3:
+  - Propuesta se crea con id único y texto generado en código.
+  - Solo el jefe (id en `ENCARGADO_JEFE_ID`) puede confirmar.
+  - Sin jefe configurado no se ejecuta nada.
+  - Propuestas caducan a los 30 minutos.
+  - No se ejecuta dos veces (marca como hecha antes de ejecutar).
+  - Confirmación falla si la propuesta es desconocida o ya expirada.
+  - Las acciones sin riesgo se ejecutan de inmediato tras confirmar.
+- `test/ordenes.test.js` — 8 casos para la cola de encargos:
+  - Orden se crea y se marca entregada solo por el agente correcto.
+  - Órdenes caducadas (>24 h) se limpian automáticamente.
+  - Resultado se reporta y persiste en disco.
+  - `leer_ordenes_pendientes()` devuelve solo las de ese agente.
 
 ## Seguridad del webhook de Telegram (F2)
 
@@ -693,13 +976,17 @@ Resumen diario del estado del hostel (ocupación, llegadas, salidas, prórrogas)
 ### F2: ✅ Escucha de Telegram y respuesta inteligente (10-sep-2026)
 El Encargado atiende preguntas en el grupo de Telegram por webhook. Entiende consultas en lenguaje natural (con Claude si `ANTHROPIC_API_KEY` está, modo palabras clave si no). Consultas soportadas: estado del día, quién llega/se va/está dentro, búsqueda de huésped, estado del equipo, revisión de cobros. Validación de seguridad en 3 niveles (firma de Telegram, chat correcto, contexto de conversación). Completada.
 
-### F3: Que actúe (con confirmación)
-El Encargado recibiría confirmación de Luis por Telegram y dispararía agentes remotamente (re-ejecutar facturador, cambiar estado de reserva, etc.) sin intervención manual del Mac. Todas las acciones requerirán confirmación explícita antes de ejecutarse. **Pendiente.**
+### F3: 🟡 Acciones con confirmación (10-sep-2026)
+El Encargado propone acciones, las muestra en cristiano en Telegram, y Luis confirma antes de ejecutar. Tres salvaguardas claves: solo el jefe confirma (verificación de id), propuestas caducan a los 30 minutos, y no se ejecutan dos veces (marcada antes de ejecutar). Acciones desplegadas: silenciar/reactivar avisos, revisar cobros, preparar lote de facturas (riesgo medio), emitir lote de facturas (riesgo alto). Puente con Mac: servidor entrega órdenes por API (cada 5 min), Mac ejecuta y reporta resultado.
+
+**Completada la arquitectura y flujo principal.** Pendiente: escribir en Cloudbeds (cambiar estado de reserva, editar datos de huésped) — será acotado a operaciones reversibles. Rotar las claves sigue pendiente.
 
 ### Pendientes administrativos
 - ✅ **Crear los 7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar) — **Hecho el 10-sep-2026.**
+- ✅ **F3 arquitectura e implementación** — **Hecho el 10-sep-2026.** Motor de acciones, salvaguardas, puente con Mac, endpoints, tests.
 - Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas (ya están, consultables con `GET /encargado/temas`).
-- **Rotar las claves** `VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY` (fueron compartidas accidentalmente en sesiones anteriores).
+- **Escribir en Cloudbeds desde F3** — cambiar estado de reserva, editar datos de huésped. Acotado a operaciones reversibles. **Pendiente.**
+- **Rotar las claves** `VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY` (fueron compartidas accidentalmente en sesiones anteriores). **Pendiente.**
 
 ## Tests
 
@@ -714,3 +1001,10 @@ node test/encargado.test.js
 node test/escucha.test.js
 ```
 18 casos: validación de webhook (firma de Telegram, chat correcto, contexto de conversación), elección de consulta según la pregunta, fallback a modo palabras clave, ejemplos de preguntas reales.
+
+**F3 (acciones con confirmación):**
+```bash
+node test/acciones.test.js
+node test/ordenes.test.js
+```
+12 casos en `acciones.test.js`: propuestas con id único, texto generado en código, verificación de jefe, expiración a los 30 minutos, ejecución una sola vez, fallback cuando no hay jefe. 8 casos en `ordenes.test.js`: creación de órdenes, entrega al Mac correcto, limpieza automática de órdenes caducadas (>24 h), reportes de resultado.
