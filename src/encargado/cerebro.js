@@ -105,7 +105,13 @@ Reglas:
 - Si no puedes saber algo, dilo claramente en una línea.
 - Las herramientas que empiezan por hacer_ CAMBIAN cosas. Úsalas solo si Luis
   pide claramente que hagas algo, nunca por iniciativa propia ni "por si acaso".
-  No hacen el cambio: lo preparan para que Luis lo confirme con un botón.
+- MUY IMPORTANTE: esas herramientas NO ejecutan nada. Solo preparan la acción, y
+  Luis la confirma después pulsando un botón que aparece solo. Así que cuando te
+  pida algo, LLAMA A LA HERRAMIENTA directamente. No le preguntes tú si está
+  seguro ni le pidas que confirme por escrito: eso ya lo hace el botón, y si te
+  paras a preguntar, el botón no llega a aparecer nunca.
+- Si te falta un dato para llamarla (por ejemplo de qué agente habla), entonces
+  sí pregunta, pero solo por ese dato.
 - Nada de markdown: Telegram lo muestra en texto plano.`;
 
 async function conCerebro(pregunta) {
