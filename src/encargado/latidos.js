@@ -192,7 +192,12 @@ router.post('/preguntar', auth, async (req, res) => {
   const p = req.body?.pregunta || req.query.q;
   if (!p) return res.status(400).json({ ok: false, error: 'Falta la pregunta' });
   try {
-    res.json({ ok: true, pregunta: p, respuesta: await cerebro.responder(p) });
+    const r = await cerebro.responder(p);
+    res.json({
+      ok: true, pregunta: p, respuesta: r.texto,
+      // Si la respuesta es una propuesta de acción, se ve aquí sin ejecutarla.
+      propuesta: r.botones ? r.botones[0].map(b => b.callback_data) : undefined,
+    });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -224,6 +229,43 @@ router.post('/temas', auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err.response?.data?.description || err.message });
   }
+});
+
+// ─── Acciones (F3) ───────────────────────────────────────────────────────────
+
+/** GET /encargado/acciones — qué sabe hacer y si hay jefe configurado. */
+router.get('/acciones', auth, (req, res) => {
+  const acciones = require('./acciones');
+  require('./acciones-basicas');
+  res.json({
+    ok: true,
+    jefeConfigurado: acciones.hayJefe(),
+    vidaPropuestaMin: acciones.VIDA_MIN,
+    acciones: Object.values(acciones.ACCIONES).map(a => ({
+      nombre: a.nombre, riesgo: a.riesgo, descripcion: a.descripcion,
+    })),
+  });
+});
+
+/**
+ * POST /encargado/jefe — quién puede confirmar acciones.
+ * Body: { ids: [123, 456] }. Requiere el secreto del servidor, así que
+ * no se puede hacer desde el chat: hay que tener acceso al backend.
+ */
+router.post('/jefe', auth, (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids)) {
+    return res.status(400).json({ ok: false, error: 'Manda { "ids": [...] }' });
+  }
+  estado.guardarJefes(ids);
+  const acciones = require('./acciones');
+  res.json({ ok: true, jefes: acciones.jefes(), fuente: process.env.ENCARGADO_JEFE_ID
+    ? 'la variable de entorno manda sobre esto' : 'guardado en disco' });
+});
+
+/** GET /encargado/quien-escribe — ids vistos, para saber cuál es el de Luis. */
+router.get('/quien-escribe', auth, (req, res) => {
+  res.json({ ok: true, vistos: escucha.quienEscribe() });
 });
 
 module.exports = router;

@@ -66,6 +66,9 @@ async function revisar({ notificar = true } = {}) {
   for (const [id, cfg] of Object.entries(AGENTES)) {
     const { alerta } = debeAlertar(cfg, ahora, arranque, estado.ultimoLatido(id));
     if (!alerta) continue;
+    // Si lo hemos silenciado a propósito, se calla y no cuenta como aviso.
+    const callado = estado.leerSilencio(id);
+    if (callado) continue;
 
     const clave = `caido:${id}:${ahora.iso}`;
     if (estado.yaAvisado(clave)) continue;

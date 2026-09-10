@@ -14,9 +14,26 @@
 const axios = require('axios');
 const temas = require('./temas');
 const { responder } = require('./cerebro');
+const acciones = require('./acciones');
 const { send } = require('../telegram');
 
 let miUsuario = null;   // @nombre del bot, para detectar menciones
+
+// Quién ha escrito en el grupo. Sirve para averiguar el id de Telegram de
+// Luis sin tener que adivinarlo: se mira aquí y se configura ENCARGADO_JEFE_ID.
+const vistos = new Map();
+function apuntarQuien(from) {
+  if (!from || from.is_bot) return;
+  vistos.set(String(from.id), {
+    id: from.id,
+    nombre: [from.first_name, from.last_name].filter(Boolean).join(' '),
+    usuario: from.username ? `@${from.username}` : null,
+    visto: new Date().toISOString(),
+  });
+}
+function quienEscribe() {
+  return [...vistos.values()].sort((a, b) => b.visto.localeCompare(a.visto));
+}
 
 async function nombreDelBot() {
   if (miUsuario !== null) return miUsuario;
@@ -79,8 +96,52 @@ const AYUDA = [
  * Procesa un aviso de Telegram. Devuelve lo que ha hecho, para el log.
  * Nunca lanza: a Telegram siempre se le responde 200 o dejará de avisar.
  */
+/** Quita el relojito del botón y, si hace falta, muestra un aviso corto. */
+async function contestarBoton(id, aviso) {
+  try {
+    const t = process.env.TELEGRAM_BOT_TOKEN;
+    await axios.post(`https://api.telegram.org/bot${t}/answerCallbackQuery`,
+      { callback_query_id: id, text: aviso || undefined, show_alert: false },
+      { timeout: 10000 });
+  } catch { /* que no llegue el acuse no debe romper nada */ }
+}
+
+/**
+ * Alguien ha pulsado Confirmar o Cancelar.
+ * El botón lo ve todo el grupo, pero solo el jefe manda: quien no lo sea
+ * recibe un aviso discreto y no pasa nada más.
+ */
+async function procesarBoton(cb) {
+  apuntarQuien(cb.from);
+  const [que, id] = String(cb.data || '').split(':');
+  const hilo = cb.message?.message_thread_id || null;
+
+  if (!acciones.esElJefe(cb.from?.id)) {
+    await contestarBoton(cb.id, 'Esto solo lo puede confirmar Luis.');
+    return { accion: 'boton-rechazado', quien: cb.from?.id };
+  }
+
+  const r = que === 'ok'
+    ? await acciones.confirmar(id, cb.from.id)
+    : acciones.cancelar(id, cb.from.id);
+
+  await contestarBoton(cb.id, r.ok ? 'Hecho' : 'No se ha podido');
+  await send(r.texto, { threadId: hilo });
+  return { accion: que === 'ok' ? 'confirmado' : 'cancelado', id, ok: r.ok };
+}
+
 async function procesar(update) {
+  if (update?.callback_query) {
+    try {
+      return await procesarBoton(update.callback_query);
+    } catch (err) {
+      console.error('[Encargado] Fallo con un botón:', err.message);
+      return { accion: 'boton-fallido', error: err.message };
+    }
+  }
+
   const msg = update?.message || update?.edited_message;
+  apuntarQuien(msg?.from);
   if (!msg || !msg.text) return { accion: 'ignorado', motivo: 'sin texto' };
   if (msg.from?.is_bot) return { accion: 'ignorado', motivo: 'lo ha dicho un bot' };
 
@@ -100,9 +161,12 @@ async function procesar(update) {
     return { accion: 'ayuda' };
   }
 
-  const respuesta = await responder(pregunta);
-  await send(respuesta, { threadId: hilo });
-  return { accion: 'respondido', pregunta, largo: respuesta.length };
+  const r = await responder(pregunta);
+  await send(r.texto, { threadId: hilo, keyboard: r.botones });
+  return {
+    accion: r.botones ? 'propuesta' : 'respondido',
+    pregunta, largo: r.texto.length,
+  };
 }
 
 /**
@@ -116,7 +180,7 @@ async function registrar(urlBase, secreto) {
   const { data } = await axios.post(`https://api.telegram.org/bot${t}/setWebhook`, {
     url,
     secret_token: secreto,
-    allowed_updates: ['message'],
+    allowed_updates: ['message', 'callback_query'],
     drop_pending_updates: true,
   }, { timeout: 15000 });
   return { url, telegram: data };
@@ -147,7 +211,7 @@ async function unaVuelta() {
     params: {
       offset: ultimoUpdate ? ultimoUpdate + 1 : undefined,
       timeout: 30,                       // Telegram espera hasta 30 s si no hay nada
-      allowed_updates: JSON.stringify(['message']),
+      allowed_updates: JSON.stringify(['message', 'callback_query']),
     },
     timeout: 40000,
   });
@@ -229,6 +293,6 @@ function estadoSondeo() {
 }
 
 module.exports = {
-  procesar, registrar, estadoEscucha, vaConmigo, limpiar, AYUDA,
+  procesar, registrar, estadoEscucha, vaConmigo, limpiar, AYUDA, quienEscribe,
   arrancarSondeo, estadoSondeo,
 };

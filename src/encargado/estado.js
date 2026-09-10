@@ -98,8 +98,69 @@ function leerTemas() {
   return leer().temas || {};
 }
 
+// Propuestas de acción pendientes de confirmar.
+function guardarPropuesta(p) {
+  const e = leer();
+  e.propuestas = e.propuestas || {};
+  e.propuestas[p.id] = p;
+  // Se limpian las viejas para que el fichero no crezca sin fin.
+  const ids = Object.keys(e.propuestas);
+  if (ids.length > 100) {
+    ids.sort((a, b) => new Date(e.propuestas[a].creada) - new Date(e.propuestas[b].creada))
+      .slice(0, ids.length - 100)
+      .forEach(k => delete e.propuestas[k]);
+  }
+  guardar();
+}
+
+function leerPropuesta(id) {
+  return (leer().propuestas || {})[id] || null;
+}
+
+function marcarPropuestaHecha(id) {
+  const e = leer();
+  if (e.propuestas && e.propuestas[id]) {
+    e.propuestas[id].hecha = new Date().toISOString();
+    guardar();
+  }
+}
+
+function borrarPropuesta(id) {
+  const e = leer();
+  if (e.propuestas) { delete e.propuestas[id]; guardar(); }
+}
+
+// Silencios: hasta qué día no molestar con un agente.
+function guardarSilencio(agente, hasta) {
+  const e = leer();
+  e.silencios = e.silencios || {};
+  if (hasta) e.silencios[agente] = hasta; else delete e.silencios[agente];
+  guardar();
+}
+
+function leerSilencio(agente) {
+  const s = (leer().silencios || {})[agente];
+  if (!s) return null;
+  // Un silencio caducado es como si no estuviera.
+  return s >= new Date().toISOString().slice(0, 10) ? s : null;
+}
+
+// Quién manda. Se puede fijar por variable de entorno o guardar aquí.
+function guardarJefes(ids) {
+  const e = leer();
+  e.jefes = (ids || []).map(String);
+  guardar();
+}
+
+function leerJefes() {
+  return leer().jefes || [];
+}
+
 module.exports = {
   ARRANQUE, FICHERO,
+  guardarJefes, leerJefes,
+  guardarSilencio, leerSilencio,
+  guardarPropuesta, leerPropuesta, marcarPropuestaHecha, borrarPropuesta,
   guardarFijado, leerFijado,
   guardarTemas, leerTemas,
   registrarLatido, ultimoLatido, todosLosLatidos,

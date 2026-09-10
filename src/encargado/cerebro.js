@@ -8,6 +8,8 @@
 
 const axios = require('axios');
 const { CONSULTAS } = require('./consultas');
+const acciones = require('./acciones');
+require('./acciones-basicas');   // registra las acciones en el catálogo
 const { hoyISO } = require('./reloj');
 
 const MODELO = process.env.ENCARGADO_MODELO || 'claude-haiku-4-5-20251001';
@@ -62,7 +64,7 @@ async function sinCerebro(pregunta) {
 // ─── modo con cerebro: Claude elige la consulta ──────────────────────────────
 
 function herramientas() {
-  return Object.entries(CONSULTAS).map(([nombre, c]) => ({
+  const consultas = Object.entries(CONSULTAS).map(([nombre, c]) => ({
     name: nombre,
     description: c.descripcion,
     input_schema: {
@@ -73,6 +75,22 @@ function herramientas() {
       required: [],
     },
   }));
+
+  // Las acciones se ofrecen con el prefijo hacer_ para que quede claro,
+  // también para el modelo, que eso no es mirar: es tocar.
+  const hacer = Object.entries(acciones.ACCIONES).map(([nombre, a]) => ({
+    name: `hacer_${nombre}`,
+    description: `[ACCIÓN, requiere confirmación de Luis] ${a.descripcion}`,
+    input_schema: {
+      type: 'object',
+      properties: Object.fromEntries(
+        Object.entries(a.parametros || {}).map(([k, d]) => [k, { type: 'string', description: d }])
+      ),
+      required: [],
+    },
+  }));
+
+  return [...consultas, ...hacer];
 }
 
 const SISTEMA = `Eres el encargado del Konk Hostel (La Manga, Murcia). Hablas con Luis, el dueño, por Telegram.
@@ -85,6 +103,9 @@ Reglas:
 - Para cualquier dato del hostel usa las herramientas. No te inventes nunca nombres, fechas ni cifras.
 - Si una herramienta ya devuelve el texto formateado, puedes pasarlo tal cual o resumirlo, pero no cambies los datos.
 - Si no puedes saber algo, dilo claramente en una línea.
+- Las herramientas que empiezan por hacer_ CAMBIAN cosas. Úsalas solo si Luis
+  pide claramente que hagas algo, nunca por iniciativa propia ni "por si acaso".
+  No hacen el cambio: lo preparan para que Luis lo confirme con un botón.
 - Nada de markdown: Telegram lo muestra en texto plano.`;
 
 async function conCerebro(pregunta) {
@@ -109,7 +130,22 @@ async function conCerebro(pregunta) {
     if (!usos.length) {
       const texto = (data.content || []).filter(b => b.type === 'text')
         .map(b => b.text).join('\n').trim();
-      return texto || 'No he sabido qué contestar a eso.';
+      return { texto: texto || 'No he sabido qué contestar a eso.' };
+    }
+
+    // Si pide una acción, se corta aquí. El mensaje de confirmación lo
+    // escribimos nosotros palabra por palabra: lo que se va a ejecutar no
+    // puede depender de cómo lo parafrasee el modelo.
+    const accion = usos.find(u => u.name.startsWith('hacer_'));
+    if (accion) {
+      const nombre = accion.name.slice('hacer_'.length);
+      try {
+        const p = await acciones.proponer(nombre, accion.input || {});
+        if (p.imposible) return { texto: p.motivo };
+        return { texto: acciones.mensaje(p), botones: acciones.botones(p) };
+      } catch (err) {
+        return { texto: `No he podido preparar eso: ${err.message}` };
+      }
     }
 
     mensajes.push({ role: 'assistant', content: data.content });
@@ -126,25 +162,30 @@ async function conCerebro(pregunta) {
     }
     mensajes.push({ role: 'user', content: resultados });
   }
-  return 'Me he liado dando vueltas a esa pregunta. Prueba a decirlo más concreto.';
+  return { texto: 'Me he liado dando vueltas a esa pregunta. Prueba a decirlo más concreto.' };
 }
 
 /**
  * Responde a una pregunta. Nunca lanza: si algo falla, lo dice.
  */
+/**
+ * Responde a una pregunta. Devuelve {texto, botones?}.
+ * Nunca lanza: si algo falla, lo dice.
+ */
 async function responder(pregunta) {
   const p = (pregunta || '').trim();
   if (!p) return null;
   try {
-    return hayCerebro() ? await conCerebro(p) : await sinCerebro(p);
+    if (!hayCerebro()) return { texto: await sinCerebro(p) };
+    return await conCerebro(p);
   } catch (err) {
     const detalle = err.response?.data?.error?.message || err.message;
     console.error('[Encargado] Fallo al responder:', detalle);
     // Si el cerebro falla, todavía podemos intentar el modo simple.
     try {
-      return `(el cerebro falló: ${detalle})\n\n` + await sinCerebro(p);
+      return { texto: `(el cerebro falló: ${detalle})\n\n` + await sinCerebro(p) };
     } catch {
-      return `No he podido responder: ${detalle}`;
+      return { texto: `No he podido responder: ${detalle}` };
     }
   }
 }
