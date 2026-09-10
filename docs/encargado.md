@@ -409,9 +409,10 @@ Si no hay `ANTHROPIC_API_KEY`, el `modo` es `"palabras_clave"` y funciona igual,
   - `quien_llega(fecha)` — huéspedes que llegan en una fecha.
   - `quien_se_va(fecha)` — huéspedes que se van en una fecha.
   - `quien_esta_dentro(fecha)` — huéspedes dentro en una fecha.
-  - `buscar_huesped(nombre)` — búsqueda por nombre de huésped.
-  - `como_va_el_equipo(fecha)` — resumen de si los agentes (facturador, vigilante) han reportado hoy.
-  - `revisar_cobros(fecha)` — estado de cobros de Cloudbeds sin facturar.
+  - `buscar_huesped(nombre)` — busca las reservas de una persona por su nombre.
+  - `por_canal(canal, fecha)` — quién está alojado viniendo de un canal (Booking, Airbnb, Expedia, web, walk-in). Resuelve preguntas como "el de Airbnb". Si ese canal no aparece, dice cuáles hay ese día.
+  - `como_va_el_equipo()` — si los agentes (facturador, vigilante) han corrido y qué han hecho. Sin parámetros.
+  - `revisar_cobros()` — lanza ahora una revisión de cobros y devuelve lo que encuentre, sin avisar al grupo. Sin parámetros.
   
   Las fechas aceptan "hoy", "mañana", "ayer" o formato AAAA-MM-DD. Cada entrada contiene su función, descripción y esquema de parámetros para que Claude las use como tools.
 
