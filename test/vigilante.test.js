@@ -26,12 +26,15 @@ const RESERVAS = [
   { reservationID: 'R7', status: 'confirmed', sourceName: 'Website/Booking Engine', balance: -15 },
   // saldo abierto pero AUN NO HA SALIDO: no es un escape todavia
   { reservationID: 'R8', status: 'confirmed', sourceName: 'Website/Booking Engine', balance: 200 },
+  // salio ANTES de que existiera el vigilante: pasivo viejo, no debe avisar
+  { reservationID: 'R11', status: 'confirmed', sourceName: 'Website/Booking Engine', balance: 500 },
 ];
 const DETALLES = {
   R1: { grandTotal: 120, paid: 0,   endDate: ayer(3), startDate: ayer(5), guestName: 'Ana Directa' },
   R6: { grandTotal: 100, paid: 60,  endDate: ayer(2), startDate: ayer(4), guestName: 'Paco Parcial' },
   R7: { grandTotal: 100, paid: 115, endDate: ayer(1), startDate: ayer(2), guestName: 'Doble Cobro' },
   R8: { grandTotal: 200, paid: 0,   endDate: '2099-01-01', startDate: '2098-12-30', guestName: 'Futuro' },
+  R11:{ grandTotal: 500, paid: 0,   endDate: ayer(60),      startDate: ayer(62),      guestName: 'Pasivo Viejo' },
 };
 // bloqueo creado 3 dias DESPUES de la noche -> retroactivo
 const idRetro = String(new Date(ayer(2) + 'T10:00:00Z').getTime()) + '000';
@@ -86,6 +89,7 @@ Module.prototype.require = function (id) {
   return real.apply(this, arguments);
 };
 process.env.DATA_DIR = path.join(require('os').tmpdir(), 'vig-test-' + Date.now());
+process.env.VIGILANTE_DESDE = ayer(30);   // R11 salió antes del corte
 const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
 Module.prototype.require = real;
 
@@ -107,6 +111,7 @@ Module.prototype.require = real;
   assert.ok(!m.includes('Futuro'), 'no avisa de estancias que aun no han salido');
   assert.ok(!m.includes('Rehecho'), 'no avisa de anulaciones ya recobradas');
   assert.ok(!m.includes('Moho'), 'no avisa de bloqueos hechos esa misma tarde');
+  assert.ok(!m.includes('Pasivo Viejo'), 'no avisa de reservas anteriores a la fecha de corte');
   assert.ok(m.includes('Anulado Sinrehacer'), 'si avisa de la anulacion sin rehacer');
   assert.strictEqual(r.importePendiente, 160, 'pendiente = 120 (R1) + 40 (R6)');
 
@@ -120,6 +125,7 @@ Module.prototype.require = real;
   console.log('  ✓ ignora estancias que aun no han salido');
   console.log('  ✓ anulacion sin rehacer si, recobrada no');
   console.log('  ✓ bloqueo retroactivo si, del mismo dia no');
+  console.log('  ✓ ignora el pasivo anterior a la fecha de corte');
   console.log('  ✓ no repite alarmas ya avisadas');
   console.log('\nTODOS LOS TESTS PASAN');
 })().catch(e => { console.error('FALLO:', e.message); process.exit(1); });

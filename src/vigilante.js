@@ -17,6 +17,10 @@ const OTA = (process.env.VIGILANTE_OTA ||
   'Booking.com,Airbnb (API),Expedia').split(',').map(s => s.trim());
 
 const DIAS_ATRAS = Number(process.env.VIGILANTE_DIAS_ATRAS || 120);
+// Fecha de corte: no se avisa de reservas que ya habían salido antes de que
+// existiera el vigilante. Ese pasivo se gestionó a mano; repetirlo cada mañana
+// sería ruido, y el ruido es lo que acaba haciendo que se ignoren las alertas.
+const DESDE = process.env.VIGILANTE_DESDE || '2026-09-10';
 const DIAS_TX = Number(process.env.VIGILANTE_DIAS_TX || 10);
 const DIAS_BLOQUEOS = Number(process.env.VIGILANTE_DIAS_BLOQUEOS || 30);
 const UMBRAL = Number(process.env.VIGILANTE_UMBRAL || 0.5);
@@ -109,8 +113,11 @@ function particionar(items, clave, estado, hoy, todo) {
 // ─── alarmas ─────────────────────────────────────────────────────────────────
 /** A/B/C: cobro escapado, cobro parcial y cobrado de más. */
 async function revisarCobros(hoy) {
+  // Nunca se mira más atrás de la fecha de corte, aunque la ventana lo permita.
+  const ventana = dias(hoy, -DIAS_ATRAS);
+  const desde = ventana > DESDE ? ventana : DESDE;
   const reservas = await paginas('/getReservations', {
-    checkOutFrom: dias(hoy, -DIAS_ATRAS), checkOutTo: dias(hoy, 1),
+    checkOutFrom: desde, checkOutTo: dias(hoy, 1),
   });
 
   // El `balance` del listado va desfasado a veces: sirve para preseleccionar,
@@ -128,6 +135,7 @@ async function revisarCobros(hoy) {
     const total = Number(b.grandTotal), pagado = Number(b.paid || 0);
     const saldo = Math.round((total - pagado) * 100) / 100;
     if (d.data.endDate > hoy) continue;   // aún no ha salido: todavía no es un escape
+    if (d.data.endDate < DESDE) continue;  // anterior al vigilante: no es asunto suyo
     const fila = {
       id: r.reservationID, canal: r.sourceName || d.data.source || '?',
       huesped: d.data.guestName, in: d.data.startDate, out: d.data.endDate,
