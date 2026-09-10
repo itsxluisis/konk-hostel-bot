@@ -75,7 +75,12 @@ router.get('/estado', auth, (req, res) => {
       resumen: l ? l.resumen : null,
     };
   });
-  res.json({ ok: true, arranque: estado.ARRANQUE.toISOString(), equipo });
+  res.json({
+    ok: true,
+    arranque: estado.ARRANQUE.toISOString(),
+    fijado: estado.leerFijado(),   // el mensaje de ESTADO anclado en el grupo
+    equipo,
+  });
 });
 
 /**
