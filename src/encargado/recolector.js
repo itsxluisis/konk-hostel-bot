@@ -32,6 +32,17 @@ async function reservas(params) {
  * Foto del Konk para una fecha (por defecto hoy, hora de Madrid).
  * Devuelve siempre un objeto; los fallos van en .fallos.
  */
+/**
+ * Deja constancia si la API devolvió cosas que no cumplían el filtro:
+ * es la señal de que Cloudbeds está ignorando un parámetro.
+ */
+function apuntarDescartes(foto, que, recibidas, validas) {
+  if (recibidas > validas) {
+    console.warn(`[Encargado] Cloudbeds devolvió ${recibidas} ${que} y solo`
+      + ` ${validas} cumplen la fecha: el filtro no se está aplicando.`);
+  }
+}
+
 async function recolectar(fecha = hoyISO()) {
   const foto = {
     fecha,
@@ -41,14 +52,21 @@ async function recolectar(fecha = hoyISO()) {
     fallos: [],
   };
 
-  // Llegadas y salidas de hoy
+  // Llegadas y salidas de hoy.
+  // Pedimos filtrado a Cloudbeds, pero NO nos fiamos: comprobamos la fecha
+  // de cada reserva por nuestra cuenta. Un filtro que la API ignore en
+  // silencio nos haría contar como salida a quien acaba de entrar.
   try {
-    foto.llegadas = await reservas({ checkInFrom: fecha, checkInTo: fecha });
+    const r = await reservas({ checkInFrom: fecha, checkInTo: fecha });
+    foto.llegadas = r.filter(x => x.entrada === fecha);
+    apuntarDescartes(foto, 'llegadas', r.length, foto.llegadas.length);
   } catch (err) {
     foto.fallos.push(`No se pudieron leer las llegadas: ${err.message}`);
   }
   try {
-    foto.salidas = await reservas({ checkOutFrom: fecha, checkOutTo: fecha });
+    const r = await reservas({ checkOutFrom: fecha, checkOutTo: fecha });
+    foto.salidas = r.filter(x => x.salida === fecha);
+    apuntarDescartes(foto, 'salidas', r.length, foto.salidas.length);
   } catch (err) {
     foto.fallos.push(`No se pudieron leer las salidas: ${err.message}`);
   }
