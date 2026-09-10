@@ -177,24 +177,43 @@ function arrancarSondeo() {
   sondeando = true;
   console.log('👂 Encargado escuchando Telegram por sondeo');
 
+  // Cuántos conflictos seguidos se toleran antes de rendirse. Diez intentos
+  // de 30 s son cinco minutos: de sobra para un despliegue, poco para un
+  // webhook mal puesto.
+  const MAX_CONFLICTOS = 10;
+
   (async function bucle() {
     let fallos = 0;
+    let conflictos = 0;
     for (;;) {
       try {
         await unaVuelta();
         fallos = 0;
+        conflictos = 0;
       } catch (err) {
         fallos++;
         const desc = err.response?.data?.description || err.message;
         // 409 = hay un webhook puesto; el sondeo y el webhook se estorban.
         ultimoErrorSondeo = { cuando: new Date().toISOString(), status: err.response?.status || null, desc };
+
         if (err.response?.status === 409) {
-          // Otro proceso está haciendo getUpdates con el mismo bot, o hay un
-          // webhook puesto. Insistir solo empeora las cosas: se para y se dice.
-          console.error('[Encargado] Sondeo en conflicto:', desc);
-          sondeando = false;
-          return;
+          // Otro proceso pregunta por el mismo bot. Durante un despliegue esto
+          // es NORMAL: la instancia vieja y la nueva se solapan unos segundos.
+          // Rendirse aquí dejaría al encargado sordo tras cada deploy, así que
+          // se espera a que la otra se muera. Solo se abandona si el conflicto
+          // dura de verdad: entonces es un webhook puesto, no un solape.
+          conflictos++;
+          if (conflictos > MAX_CONFLICTOS) {
+            console.error('[Encargado] Conflicto persistente, dejo de escuchar:', desc);
+            sondeando = false;
+            return;
+          }
+          console.warn(`[Encargado] Sondeo en conflicto (${conflictos}/${MAX_CONFLICTOS}),`
+            + ' probablemente un despliegue. Reintento en 30 s.');
+          await new Promise(r => setTimeout(r, 30000));
+          continue;
         }
+
         console.error(`[Encargado] Sondeo falló (${fallos}):`, desc);
         // Espera creciente, con tope de un minuto.
         await new Promise(r => setTimeout(r, Math.min(60000, 2000 * fallos)));
