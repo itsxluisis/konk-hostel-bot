@@ -28,6 +28,8 @@ const RECORDAR_CADA = Number(process.env.VIGILANTE_RECORDAR_DIAS || 7);
 const HORA = Number(process.env.VIGILANTE_HORA || 9);
 const TZ = 'Europe/Madrid';
 
+// Con WORKDIR /app y el código en /app/src, esto resuelve a /app/data: montar
+// ahí un volumen de EasyPanel basta para que el estado sobreviva a los deploys.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const ESTADO = path.join(DATA_DIR, 'vigilante-estado.json');
 
@@ -319,4 +321,30 @@ function arrancar() {
   console.log(`[Vigilante] programado L-S a las ${HORA}:00 (${TZ})`);
 }
 
-module.exports = { arrancar, ejecutar };
+/** Diagnóstico para /health: dice si el estado sobrevive a un redeploy. */
+function info() {
+  let persistente = false, motivo = null;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const probe = path.join(DATA_DIR, '.probe');
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    persistente = true;
+  } catch (e) {
+    motivo = e.code || e.message;
+  }
+  const est = cargarEstado();
+  return {
+    activo: process.env.VIGILANTE_OFF !== '1',
+    horario: `L-S ${HORA}:00 ${TZ}`,
+    desde: DESDE,
+    ota: OTA,
+    dataDir: DATA_DIR,
+    estado: persistente ? 'persistente' : 'solo memoria',
+    ...(motivo ? { motivoNoPersistente: motivo } : {}),
+    ultimaRevision: est.ultimaRevision || null,
+    alarmasRecordadas: Object.keys(est.conocidos || {}).length,
+  };
+}
+
+module.exports = { arrancar, ejecutar, info };

@@ -353,7 +353,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     cloudbeds: !!process.env.CLOUDBEDS_REFRESH_TOKEN ? 'authorized' : 'pending_auth',
     telegram: !!process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'missing',
-    vigilante: process.env.VIGILANTE_OFF === '1' ? 'off' : 'on',
+    vigilante: vigilante.info(),
   });
 });
 
