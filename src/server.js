@@ -469,6 +469,11 @@ app.post('/vapi/assistant-config', (req, res) => {
 // ─── ARRANQUE ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 80;
 if (process.env.VIGILANTE_OFF !== '1') vigilante.arrancar();
+// ───── Encargado del Konk ─────
+// Módulo aislado: vigila a los agentes (facturador, vigilante de cobros) y
+// avisa si alguno no da señales de vida. No toca el flujo de voz.
+require('./encargado').montar(app);
+
 app.listen(PORT, () => {
   console.log(`
 ╔══════════════════════════════════════════════════════╗
