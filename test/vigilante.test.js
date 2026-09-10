@@ -100,7 +100,8 @@ Module.prototype.require = function (id) {
 process.env.DATA_DIR = path.join(require('os').tmpdir(), 'vig-test-' + Date.now());
 process.env.VIGILANTE_DESDE = ayer(30);   // R11 salió antes del corte
 const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
-Module.prototype.require = real;
+// La intercepcion se queda puesta: vigilante.js carga './encargado/estado' de
+// forma perezosa, ya dentro de ejecutar(), no al importarse.
 
 // --- comprobaciones -----------------------------------------------------------
 (async () => {
