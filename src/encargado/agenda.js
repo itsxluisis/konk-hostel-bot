@@ -19,8 +19,15 @@ const HORA_PARTE = process.env.ENCARGADO_HORA_PARTE || '09:15';
 async function refrescarEstado(foto) {
   const texto = estadoFijado(foto);
   const guardado = estado.leerFijado();
+  const hilo = temas.idDe('ESTADO');
 
-  if (guardado && guardado.messageId) {
+  // Si el carril ha cambiado (por ejemplo, se acaban de crear los temas y
+  // el fijado seguía en General), no vale con editarlo: hay que ponerlo
+  // donde toca. Un mensaje no se puede mover de tema.
+  const cambioDeCarril = guardado
+    && Number(guardado.hilo || 0) !== Number(hilo || 0);
+
+  if (guardado && guardado.messageId && !cambioDeCarril) {
     const r = await edit(guardado.messageId, texto);
     if (r !== null) return { accion: 'editado', messageId: guardado.messageId };
     // edit() devuelve null tanto si no cambió nada como si falló.
@@ -30,11 +37,11 @@ async function refrescarEstado(foto) {
     }
   }
 
-  const msg = await send(texto, { threadId: temas.idDe('ESTADO') });
+  const msg = await send(texto, { threadId: hilo });
   if (!msg) return { accion: 'fallo', messageId: null };
   await pin(msg.message_id);
-  estado.guardarFijado(msg.message_id);
-  return { accion: 'creado', messageId: msg.message_id };
+  estado.guardarFijado(msg.message_id, hilo);
+  return { accion: cambioDeCarril ? 'rehecho en su carril' : 'creado', messageId: msg.message_id };
 }
 
 /** Manda el parte del día y deja el ESTADO al día. */
