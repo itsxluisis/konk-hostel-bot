@@ -570,6 +570,118 @@ En el hostel es corriente que alguien alargue la estancia registrada como una re
 
 El único agente que sigue en el Mac es el **Facturador Konk** (lunes).
 
+---
+
+## Los siete carriles — Organización de temas en Telegram (10-sep-2026)
+
+El grupo de Telegram del Konk se llama **"Konk alertas"** (supergrupo). Tiene los **Temas** (Topics) activados, y el encargado creó siete carriles, cada uno con su cometido:
+
+| Tema | ID | Qué llega ahí |
+|---|---|---|
+| 📌 Estado | 969 | El mensaje fijado que se reescribe en sitio |
+| 🛎️ Parte diario | 970 | El parte de las 09:15 |
+| ⚠️ Alertas | 971 | Agente caído, e incidencias de huéspedes del bot de voz |
+| 📞 Llamadas | 972 | Resumen de cada llamada (end-of-call-report) |
+| 💰 Cobros | 973 | El vigilante de cobros |
+| 🧾 Facturas | 974 | El facturador |
+| 💬 Preguntar | 975 | Las preguntas a Claude y sus respuestas |
+
+### Cómo funciona `src/encargado/temas.js`
+
+- **Telegram permite CREAR temas por API** (`createForumTopic`) **pero NO listarlos.** Por eso los IDs de los temas que crea el encargado se guardan en disco (`encargado.json`, campo `temas`).
+- **`idDe(clave)`** resuelve el ID del tema: primero mira la variable de entorno `TG_TEMA_<CLAVE>` (que siempre prevalece), luego lo guardado en disco. Si no hay nada, devuelve `null` y el mensaje cae en el tema General.
+- **Se eliminó el mapa `TEMAS`** que había en `config.js`: era una segunda fuente de verdad leída del entorno al arrancar. Ahora los IDs se crean en caliente y se guardan.
+
+### Endpoints para gestionar temas
+
+#### `GET /encargado/temas`
+
+Consulta si el grupo tiene Temas activados y a dónde va cada cosa.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "grupo_tiene_temas": true,
+  "chat_id": -1001234567890,
+  "temas": {
+    "ESTADO": 969,
+    "PARTE": 970,
+    "ALERTAS": 971,
+    "LLAMADAS": 972,
+    "COBROS": 973,
+    "FACTURAS": 974,
+    "PREGUNTAR": 975
+  }
+}
+```
+
+Si `grupo_tiene_temas: false`, el grupo aún no tiene activados los Temas. Ver más abajo.
+
+#### `POST /encargado/temas`
+
+Crea los carriles que falten. Es **idempotente**: si algunos ya existen, los deja y crea solo los ausentes.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Parámetro opcional `?rehacer=1`:** crea todos los carriles de nuevo, dejando huérfanos los anteriores (usar con cuidado).
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "creados": {
+    "ESTADO": 969,
+    "PARTE": 970,
+    "ALERTAS": 971,
+    "LLAMADAS": 972,
+    "COBROS": 973,
+    "FACTURAS": 974,
+    "PREGUNTAR": 975
+  },
+  "ya_existentes": {}
+}
+```
+
+**Response (409) si el grupo no tiene Temas activados:**
+```json
+{
+  "ok": false,
+  "error": "El grupo no tiene Temas habilitados",
+  "mensaje": "Activa los Temas en los ajustes del grupo (Editar → Temas) y reintenta"
+}
+```
+
+### Activar los Temas es manual
+
+**No se puede por API.** Hay que hacerlo en los ajustes del grupo (Editar → Temas), y el bot necesita el permiso de administrador **"Gestionar temas"**. Una vez activados, las siguientes llamadas a `POST /encargado/temas` crean los carriles.
+
+Nota útil: si el grupo ya es supergrupo, activar los Temas **NO cambia el `chat_id`**.
+
+### Enrutado de avisos que no son del encargado
+
+Se enrutaron también los mensajes del bot de voz y el vigilante de cobros a sus carriles:
+
+- **Incidencias de huéspedes** (del bot de voz) → tema **Alertas**
+- **Resúmenes de llamada** (end-of-call-report) → tema **Llamadas**
+- **Vigilante de cobros** → tema **Cobros**
+
+Todos usan `require('./encargado').hilo('CLAVE')` con carga perezosa y **try/catch**: si el encargado no está montado o algo falla, devuelve `null` y el mensaje cae en General como siempre. **Ningún aviso se pierde** por esto.
+
+### Un mensaje no se puede mover de tema
+
+El mensaje de ESTADO fijado guarda en qué carril está. Si el carril cambia (por ejemplo al crear los temas, cuando el fijado estaba en General), **se crea de nuevo en el lugar correcto y se desancla el anterior**, para no dejar arriba un anclado congelado con datos obsoletos.
+
+---
+
 ## Fases completadas y pendientes
 
 ### F0: ✅ Vigilancia de latidos (base)
@@ -584,10 +696,10 @@ El Encargado atiende preguntas en el grupo de Telegram por webhook. Entiende con
 ### F3: Que actúe (con confirmación)
 El Encargado recibiría confirmación de Luis por Telegram y dispararía agentes remotamente (re-ejecutar facturador, cambiar estado de reserva, etc.) sin intervención manual del Mac. Todas las acciones requerirán confirmación explícita antes de ejecutarse. **Pendiente.**
 
-### Pendiente administrativo
-- Crear los **7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar).
-- Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas.
-- Registrar el webhook en Telegram ejecutando `POST /encargado/registrar-escucha`.
+### Pendientes administrativos
+- ✅ **Crear los 7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar) — **Hecho el 10-sep-2026.**
+- Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas (ya están, consultables con `GET /encargado/temas`).
+- **Rotar las claves** `VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY` (fueron compartidas accidentalmente en sesiones anteriores).
 
 ## Tests
 
