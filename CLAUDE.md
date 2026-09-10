@@ -51,6 +51,15 @@ El bot **no** gestiona reservas (dirige a haztureserva.app) y **nunca da código
 
 Al terminar cada llamada, Vapi envía el `end-of-call-report` al servidor, que reenvía un resumen breve al grupo de Telegram de staff para monitoreo.
 
+## Encargado — Vigilancia de agentes locales
+
+Supervisor que monitorea agentes autónomos en máquinas locales (facturador-konk, vigilante-cobros) y detecta su ausencia el mismo día en que no corren. Ver detalles en `docs/encargado.md`.
+
+- **Horario facturador**: lunes 09:00 ± 120 min.
+- **Horario vigilante**: L-S 09:00 ± 120 min.
+- **Revisión periódica**: cada 10 minutos.
+- **Alarma**: aviso a Telegram en tema correspondiente si falta el latido.
+
 ## Estado actual
 
 - **Prompt Vapi (ES):** `vapi/system-prompt.md` — se sincroniza solo al hacer push (Action `sync-vapi.yml`)
@@ -80,6 +89,12 @@ Al terminar cada llamada, Vapi envía el `end-of-call-report` al servidor, que r
 2. **Añadir el parámetro `preference`** (enum private/shared/any) al schema de la tool `get_availability` en Vapi — el servidor ya lo soporta (default `any`).
 3. **Afinar turn-detection/endpointing** en Vapi para bajar latencia (los waits por defecto añaden ~1,5s).
 4. **Rellenar placeholders de la KB UpMarket** (códigos de armarios, parking, mascotas) y re-subirla al panel.
+5. **Puesta en marcha del Encargado** (Fase 0: vigilancia básica, Fases 1-3 en roadmap de `docs/encargado.md`):
+   - Crear 7 temas en el grupo de Telegram del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar).
+   - Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas.
+   - Copiar `ENCARGADO_SECRET` (de `.env` EasyPanel) a `.env` del facturador-konk y vigilante-cobros en el Mac.
+   - Rellenar `ENCARGADO_URL` (URL del servidor Konk) en ambos agentes locales.
+   - Verificar que los agentes llamen a `latir()` al terminar (ya está implementado en el código).
 
 ## Cómo trabajar en este repo
 
