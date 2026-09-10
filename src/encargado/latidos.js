@@ -297,6 +297,19 @@ router.post('/acciones/:nombre', auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /encargado/cloudbeds/permisos
+ * Qué nos deja hacer Cloudbeds. No escribe nada: cada prueba usa un id
+ * inexistente, así que lo peor que puede pasar es un "no lo encuentro".
+ */
+router.get('/cloudbeds/permisos', auth, async (req, res) => {
+  try {
+    res.json({ ok: true, pruebas: await require('./permisos').comprobar() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ─── Órdenes para los agentes del Mac ────────────────────────────────────────
 
 /**
