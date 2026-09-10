@@ -157,6 +157,60 @@ curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/
 }
 ```
 
+---
+
+### `POST /encargado/parte?seco=1`
+
+Genera el parte diario (resumen del estado del hostel basado en Cloudbeds) y lo envía a Telegram en el tema `TG_TEMA_PARTE`.
+
+Con `?seco=1`, calcula pero no envía a Telegram, e incluye las listas crudas de llegadas y salidas en `datos.detalle` para inspeccionar los filtros.
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Ejemplo curl:**
+```bash
+# Generar y enviar parte diario
+curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/parte" \
+  -H "x-encargado-secret: tu-secret-aqui"
+
+# Generar en seco (sin enviar, con detalle)
+curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/parte?seco=1" \
+  -H "x-encargado-secret: tu-secret-aqui"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "seco": false,
+  "datos": {
+    "foto": {
+      "timestamp": "2026-09-10T09:15:00.000Z",
+      "ocupacion": {
+        "ocupados": 12,
+        "llegadas_hoy": 3,
+        "salidas_hoy": 2,
+        "se_quedan_mas": 1
+      },
+      "fallos": []
+    },
+    "texto_corto": "🏨 12 huéspedes · +3 llegadas · -2 salidas · ↗ 1 prórroga",
+    "texto_largo": "...",
+    "detalle": {
+      "llegadas": [...],
+      "salidas": [...],
+      "prorrogas": [...]
+    }
+  },
+  "enviado_a_telegram": true
+}
+```
+
+**Nota:** si falla alguna consulta a Cloudbeds, el parte no dice "ocupación cero"; avisa de que no ha podido leer y explica por qué.
+
 ## Variables de entorno
 
 | Variable | Descripción | Obligatoria | Default |
@@ -175,13 +229,24 @@ curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/
 
 ## Archivos
 
+### Vigilancia de latidos (F0)
+
 - `src/encargado/config.js` — definición de agentes vigilados y sus horarios.
 - `src/encargado/reloj.js` — hora de Madrid (el servidor corre en UTC).
 - `src/encargado/estado.js` — persistencia en `encargado.json`.
 - `src/encargado/vigilancia.js` — lógica pura de detección (`debeAlertar()`) y scheduler.
-- `src/encargado/latidos.js` — router Express para los endpoints.
+- `src/encargado/latidos.js` — router Express para los endpoints `/encargado/latido`, `/encargado/estado`, `/encargado/revisar`.
 - `src/encargado/index.js` — función `montar(app)` para registrar el módulo.
-- `test/encargado.test.js` — 10 casos de test; ejecutar con `node test/encargado.test.js`.
+
+### Parte diario (F1)
+
+- `src/encargado/recolector.js` — lee el estado actual del Konk de Cloudbeds. Solo lectura: consulta `getReservations` con filtros de fecha. Si una consulta falla, anota el error en `foto.fallos` y sigue adelante (el parte nunca asume que los datos están incompletos; lo reporta).
+- `src/encargado/parte.js` — funciones puras que convierten la foto de Cloudbeds en texto. Exporta `estadoFijado()` (resumen corto para el mensaje fijado, ej. "🏨 12 huéspedes") y `parteDiario()` (resumen largo con detalles).
+- `src/encargado/agenda.js` — reloj de ejecución automática: envía el parte diario a las 09:15 hora de Madrid (configurable con `ENCARGADO_HORA_PARTE`) y refresca el mensaje de ESTADO fijado cada hora. Persiste la marca "ya enviado hoy" en disco para que un redespliegue no lo repita.
+
+### Tests
+
+- `test/encargado.test.js` — 27 casos; ejecutar con `node test/encargado.test.js`.
 
 ## Cómo añadir un agente nuevo a la vigilancia
 
@@ -253,16 +318,46 @@ curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/
 
 5. **Reiniciar el servidor del Konk** para que `config.js` se recargue.
 
+## Decisiones de diseño de F1
+
+El parte diario es fiable porque:
+
+### 1. No se fía del filtro de fechas de Cloudbeds
+Se pide `checkOutFrom`/`checkOutTo`, pero la API devuelve reservas que no lo cumplen, así que los filtros se aplican en nuestro lado. Si la respuesta no cuadra con lo solicitado, queda un aviso en el log. Sin esto, el parte contaba como salidas a gente que acababa de entrar.
+
+### 2. Cero por no haber podido preguntar no es cero de verdad
+Si falla alguna consulta a Cloudbeds, el parte **no dice** "el hostel está vacío"; dice que no ha podido leer y explica por qué. El mensaje fijado muestra "Datos incompletos" en lugar de cifras.
+
+### 3. Prórrogas
+En el hostel es corriente que alguien alargue la estancia registrada como una reserva nueva: sale hoy y entra hoy. Contarlo como salida + llegada da una imagen falsa del movimiento. Se cruzan por nombre (normalizado: sin tildes, sin importar el orden de nombre y apellido) y se muestran en la línea "se quedan más días". Limitación conocida: dos huéspedes distintos con el mismo nombre se confundirían, pero el error sería solo de presentación.
+
+### Otros detalles de implementación
+
+- El parte solo se envía dentro de una ventana de 3 horas desde su hora esperada. Si el servidor arranca por la tarde, no dispara un "parte de la mañana" a deshora.
+- La marca "ya enviado hoy" vive en disco (`encargado.json`) para que un redespliegue no repita el envío.
+- El mensaje de ESTADO se fija una sola vez y luego se reescribe en sitio (`telegram.edit()` + `telegram.pin()`), en lugar de acumular mensajes.
+- El parte lee también el estado del vigilante de cobros (ahora en `src/vigilante.js`, ver abajo) y solo lo menciona si hay algo que decir: que esté apagado, o que su última revisión no sea de hoy.
+
+## Vigilante de cobros — cambio de arquitectura
+
+⚠️ **El vigilante de cobros ya no corre en el Mac.** Se reescribió en Node/Express y corre en este mismo backend (`src/vigilante.js`), programado L-S a las 09:00 hora de Madrid. El LaunchAgent del Mac se retiró el 10-sep-2026 para evitar dos vigilantes avisando por duplicado.
+
+El único agente que sigue en el Mac es el **Facturador Konk** (lunes).
+
 ## Pendiente / fases siguientes
 
-### F1: Parte diario
-El Encargado debería enviar un resumen diario (ej. 09:30) mostrando qué agentes corrieron ayer y cuál falta por correr hoy. Útil para darse cuenta el lunes que el facturador de la semana pasada no llegó a terminar.
+### F1: ✅ Parte diario y mensaje de ESTADO fijado (10-sep-2026)
+Hecho y en producción. Genera un resumen diario del estado del hostel (ocupación, llegadas, salidas, prórrogas) a las 09:15 y refresca el mensaje fijado cada hora. Incluye datos sobre el vigilante de cobros.
 
 ### F2: Preguntar por Telegram
-En lugar de solo alertar, el Encargado podría preguntar "¿Te doy permiso para re-ejecutar el facturador?" vía botón en Telegram, y re-dispararía el agente sin tocar el Mac.
+El Encargado podría preguntar "¿Te doy permiso para re-ejecutar el facturador?" vía botón en Telegram, y re-dispararía el agente sin tocar el Mac. Requiere webhook entrante para recibir respuestas.
 
 ### F3: Que actúe
 El Encargado recibiría confirmación de Luis por Telegram y dispararía el agente remotamente vía SSH o API local, sin intervención manual del Mac.
+
+### Pendiente administrativo
+- Crear los **7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar).
+- Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas.
 
 ## Test
 
@@ -270,4 +365,4 @@ El Encargado recibiría confirmación de Luis por Telegram y dispararía el agen
 node test/encargado.test.js
 ```
 
-10 casos: horarios cruzados, latidos atrasados, faltas detectadas, resolución de alertas, persistencia.
+27 casos: vigilancia de latidos (horarios cruzados, atrasados, faltas), parte diario (recolección de datos, cálculo de ocupación, prorrogas, manejo de fallos), generación de textos, persistencia y scheduling.
