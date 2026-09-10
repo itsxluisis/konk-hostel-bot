@@ -77,4 +77,20 @@ async function pin(messageId) {
   }
 }
 
-module.exports = { send, edit, pin };
+/** Desancla un mensaje. Si ya no existe o no estaba anclado, da igual. */
+async function unpin(messageId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId || !messageId) return false;
+  try {
+    await axios.post(`https://api.telegram.org/bot${token}/unpinChatMessage`,
+      { chat_id: chatId, message_id: Number(messageId) });
+    return true;
+  } catch (err) {
+    console.warn('[Telegram] No se pudo desanclar:',
+      err.response?.data?.description || err.message);
+    return false;
+  }
+}
+
+module.exports = { send, edit, pin, unpin };

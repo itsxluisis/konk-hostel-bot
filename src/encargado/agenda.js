@@ -8,7 +8,7 @@ const { partes, aMinutos } = require('./reloj');
 const estado = require('./estado');
 const { recolectar } = require('./recolector');
 const { estadoFijado, parteDiario } = require('./parte');
-const { send, edit, pin } = require('../telegram');
+const { send, edit, pin, unpin } = require('../telegram');
 
 const HORA_PARTE = process.env.ENCARGADO_HORA_PARTE || '09:15';
 
@@ -36,6 +36,10 @@ async function refrescarEstado(foto) {
       return { accion: 'sin-cambios', messageId: guardado.messageId };
     }
   }
+
+  // Al mudarse de carril, el anclado viejo se queda con datos congelados.
+  // Dejarlo arriba solo confunde.
+  if (cambioDeCarril && guardado.messageId) await unpin(guardado.messageId);
 
   const msg = await send(texto, { threadId: hilo });
   if (!msg) return { accion: 'fallo', messageId: null };
