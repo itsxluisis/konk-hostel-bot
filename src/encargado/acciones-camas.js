@@ -61,6 +61,7 @@ registrar('bloquear_cama', {
     desde: 'primera noche AAAA-MM-DD (por defecto hoy)',
     hasta: 'noche de salida AAAA-MM-DD (por defecto mañana)',
     motivo: 'por qué se bloquea',
+    tipo: 'clase de bloqueo (por defecto mantenimiento)',
   },
   async resumen(args) {
     const r = await resolver(args);
@@ -86,6 +87,8 @@ registrar('bloquear_cama', {
         startDate: r.desde,
         endDate: r.hasta,
         rooms: [{ roomID: r.cama.id, quantity: 1 }],
+        // Cloudbeds exige decir de qué clase es el bloqueo.
+        roomBlockType: args.tipo || process.env.CLOUDBEDS_TIPO_BLOQUEO || 'maintenance',
         roomBlockReason: args.motivo || 'Bloqueada desde el encargado',
       });
     } catch (err) {
