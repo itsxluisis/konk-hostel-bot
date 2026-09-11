@@ -698,10 +698,10 @@ x-encargado-secret: <ENCARGADO_SECRET>
   - `buscar(texto)` — busca en el inventario actual; si hay ambigüedad, devuelve la lista; si hay una coincidencia, devuelve la cama.
   - `resumen()` — resumen breve: "20 camas, 3 bloqueadas" (solo lectura).
   
-  **Inventario real del Konk (11-sep-2026):** 20 unidades:
-  - **Compartidas (15 camas):** R2(1) a R2(6) tipo "Habitación Compartida/Privada 6" (6 camas); R4(1) a R4(5) tipo "Habitación compartida/privada 6" (5 camas pese al nombre); R5(1) a R5(4) tipo "Habitación Compartida/Privada 4" (4 camas).
+  **Inventario real del Konk (11-sep-2026):** 31 unidades:
+  - **Compartidas (26 camas):** R2(1..6) tipo "Habitación Compartida/Privada 6" (6 camas); R4(1..6) tipo "Habitación compartida/privada 6" (6 camas); H9(1..6) tipo "Habitación compartida / privada mujeres 6" (dormitorio femenino, 6 camas); R5(1..4) tipo "Habitación Compartida/Privada 4" (4 camas); R8(1..4) tipo "Habitación compartida/privada 4" (4 camas).
   - **Privadas (5 habitaciones):** Room 1 (Doble); Room 7 (Doble); Room 10 (Doble con entrada independiente); "Room 6 parejas" (litera matrimonio, 2 ó 4 personas); R3(1) (Doble adaptada para minusválidos).
-  - **Atención:** dos tipos difieren solo por mayúscula ("Compartida/Privada 6" vs "compartida/privada 6"), así que se cuenta lo físico, no el nombre del tipo.
+  - **Nota sobre conteo:** R4 y H9 no aparecían en la primera página de `getRooms` (trampa de paginado: la API devuelve solo 20 por defecto). Tras paginar correctamente se ven los 31 reales. Se cuenta lo físico, no el nombre del tipo.
 
 - `src/encargado/acciones-camas.js` — acciones para cambiar estado de camas:
   - `bloquear_cama(parametros)` — bloquea un rango de fechas en una cama concreta. Riesgo **alto** porque cierra esa cama; se escribe de verdad en Cloudbeds API endpoint `postRoomBlock` con `roomBlockID` único. Propuesta muestra: nombre de la cama, fechas exactas, razón del bloqueo.
@@ -710,7 +710,9 @@ x-encargado-secret: <ENCARGADO_SECRET>
 - Consulta nueva en `src/encargado/consultas.js`:
   - `que_camas_hay(soloBloqueadas)` — solo lectura: lista todas las camas o solo las que están bloqueadas en Cloudbeds en la fecha actual o en un rango. Sin parámetros toca que es un booleano true/false.
 
-### Escribir en Cloudbeds — cuatro trampas verificadas en producción (11-sep-2026)
+### Escribir en Cloudbeds — cinco trampas verificadas en producción (11-sep-2026)
+
+**Trampa 0: Cloudbeds pagina TODO lo que lista.** `getRooms`, `getReservations`, `getTransactions`, `getRoomBlocks` devuelven solo la primera página si no se especifican `pageNumber` y `pageSize`. El error no se nota porque los datos parecen completos: están los primeros N registros, pero faltan los demás. Ejemplo real: `getRooms` sin paginar devolvía 20 camas (count: 20, total: 31); dos dormitorios enteros (H9 y R8) y el femenino no existían para el encargado. Afectaba también a `getReservations` en el recolector: el parte diario mira 60 días de entradas, pero si solo ve la primera página (60 reservas), pierde gente si hay más. **Solución:** comparar siempre `count` con `total`. Si `count < total`, hay más páginas. El módulo `src/encargado/paginado.js` exporta `todas(endpoint, params)` que recorre automáticamente todas las páginas (tamaño 100, corta cuando una página es más corta que el tamaño o al alcanzar `total`). Lo usan `inventario.js`, `recolector.js` y `consultas.js`. Verificado 11-sep-2026: fue la causa de que R4 y H9 desaparecieran.
 
 **Trampa 1: Formato de POST.** Cloudbeds admite POST en `x-www-form-urlencoded` (key1=value1&key2=value2) pero **rechaza JSON** con error HTTP 200 + `{"success": false, "message": "Parameter X is required"}` para un parámetro que sí va puesto. El servidor (`src/cloudbeds.js`) convierte los POST a form-urlencoded automáticamente; los GET siguen siendo querystring normal.
 
@@ -818,7 +820,7 @@ Endpoints auxiliares que validan acceso sin modificar datos:
   - Ambigüedad: "R2" → devuelve null, el encargado pregunta cuál ("¿R2(1) a R2(6)?").
   - Nombres compuestos: "Room 6 parejas" → coincide exacto.
   - Rechazo de parciales: "Room" → no elige nada (podría ser Room 1, 7, 10 o "Room 6 parejas").
-  - Con inventario real del Konk (20 camas).
+  - Con inventario real del Konk (31 camas).
 
 ### Tests para acciones de camas
 
