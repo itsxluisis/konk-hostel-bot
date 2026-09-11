@@ -85,31 +85,44 @@ async function resumen() {
  * no si tiene bloqueos futuros. Para saber qué hay puesto hay que preguntar
  * por getRoomBlocks en un rango.
  */
-async function bloqueos({ desde, hasta } = {}) {
+function masDias(iso, n) {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+async function bloqueos({ desde, hasta, dias = 120 } = {}) {
   const hoy = new Date().toISOString().slice(0, 10);
   const d = desde || hoy;
-  const h = hasta || (() => {
-    const x = new Date(`${hoy}T12:00:00Z`);
-    x.setUTCDate(x.getUTCDate() + 180);
-    return x.toISOString().slice(0, 10);
-  })();
+  const h = hasta || masDias(d, dias);
 
-  const r = await api('GET', '/getRoomBlocks', { startDate: d, endDate: h, pageSize: 100 });
-  const data = r?.data;
-  const grupos = Array.isArray(data) ? data : (data ? [data] : []);
+  // Cloudbeds no acepta rangos de más de 35 días, así que se va por tramos.
+  const VENTANA = 30;
+  const vistos = new Set();
   const salida = [];
-  for (const g of grupos) {
-    for (const b of (g?.roomBlocks || [])) {
-      salida.push({
-        id: b.roomBlockID,
-        roomID: b.roomID || null,
-        nombre: b.roomName || null,
-        desde: b.startDate,
-        hasta: b.endDate,
-        tipo: b.roomBlockType || null,
-        motivo: (b.roomBlockReason || '').trim(),
-      });
+  let ini = d;
+  while (ini < h) {
+    const fin = masDias(ini, VENTANA) > h ? h : masDias(ini, VENTANA);
+    const r = await api('GET', '/getRoomBlocks',
+      { startDate: ini, endDate: fin, pageSize: 100 });
+    const data = r?.data;
+    const grupos = Array.isArray(data) ? data : (data ? [data] : []);
+    for (const g of grupos) {
+      for (const b of (g?.roomBlocks || [])) {
+        if (vistos.has(b.roomBlockID)) continue;   // se solapan los tramos
+        vistos.add(b.roomBlockID);
+        salida.push({
+          id: b.roomBlockID,
+          roomID: b.roomID || null,
+          nombre: b.roomName || null,
+          desde: b.startDate,
+          hasta: b.endDate,
+          tipo: b.roomBlockType || null,
+          motivo: (b.roomBlockReason || '').trim(),
+        });
+      }
     }
+    ini = masDias(fin, 1);
   }
   return salida;
 }
