@@ -690,11 +690,75 @@ x-encargado-secret: <ENCARGADO_SECRET>
   - `limpiar_caducadas()` — rutina interna cada 10 min para purgar órdenes de >24 horas.
   - `get_todas()` — para diagnosticar.
 
+### Bloquear y desbloquear camas (F3 completado)
+
+- `src/encargado/inventario.js` — gestión del inventario de camas del Konk. Funciones puras:
+  - `camas(soloBloqueadas)` — devuelve array con todas las camas o solo las bloqueadas; caché de 10 minutos desde Cloudbeds.
+  - `elegir(lista, texto)` — función pura que busca UNA cama en la lista por nombre exacto (sin tildes ni mayúsculas); si encaja con varias o ninguna, devuelve `null`.
+  - `buscar(texto)` — busca en el inventario actual; si hay ambigüedad, devuelve la lista; si hay una coincidencia, devuelve la cama.
+  - `resumen()` — resumen breve: "20 camas, 3 bloqueadas" (solo lectura).
+  
+  **Inventario real del Konk (10-sep-2026):** 20 unidades:
+  - **Compartidas (15 camas):** R2(1) a R2(6) tipo "Habitación Compartida/Privada 6" (6 camas); R4(1) a R4(5) tipo "Habitación compartida/privada 6" (5 camas pese al nombre); R5(1) a R5(4) tipo "Habitación Compartida/Privada 4" (4 camas).
+  - **Privadas (5 habitaciones):** Room 1 (Doble); Room 7 (Doble); Room 10 (Doble con entrada independiente); "Room 6 parejas" (litera matrimonio, 2 ó 4 personas); R3(1) (Doble adaptada para minusválidos).
+  - **Atención:** dos tipos difieren solo por mayúscula ("Compartida/Privada 6" vs "compartida/privada 6"), así que se cuenta lo físico, no el nombre del tipo.
+
+- `src/encargado/acciones-camas.js` — acciones para cambiar estado de camas:
+  - `bloquear_cama(parametros)` — bloqueará un rango de fechas en una cama concreta. Riesgo **alto** porque cierra esa cama; se escribe de verdad en Cloudbeds API endpoint `postRoomBlock`. Propuesta muestra: nombre de la cama, fechas exactas, razón del bloqueo.
+  - `desbloquear_cama(parametros)` — levanta un bloqueo existente. Riesgo **medio** porque es reversible (el bloqueo se borra, la cama vuelve a estar libre). Propuesta muestra: cama, cuál bloqueo se va a deshacer.
+
+- Consulta nueva en `src/encargado/consultas.js`:
+  - `que_camas_hay(soloBloqueadas)` — solo lectura: lista todas las camas o solo las que están bloqueadas en Cloudbeds en la fecha actual o en un rango. Sin parámetros toca que es un booleano true/false.
+
+### Escribir en Cloudbeds — dos trampas importantes
+
+**Trampa 1: Formato de POST.** Cloudbeds admite POST en `x-www-form-urlencoded` (key1=value1&key2=value2) pero **rechaza JSON** con error HTTP 200 + `{"success": false, "message": "Parameter X is required"}` para un parámetro que sí va puesto. El servidor (`src/cloudbeds.js`) convierte los POST a form-urlencoded automáticamente; los GET siguen siendo querystring normal.
+
+**Trampa 2: Éxito aparente.** Cloudbeds **responde siempre HTTP 200**, incluso cuando la acción falló. Ejemplo: bloquear una cama que ya está bloqueada da `{"success": false, "message": "..."}`. Hay que leer **siempre** el campo `success` del body, no solo el código HTTP. El servidor devuelve `{ok: true, success: false, message: "..."}` si algo fue mal; todo handler debe revisar `success`.
+
+**Parámetros de `postRoomBlock` (verificados):** requiere `startDate`, `endDate`, `rooms` (array JSON de `{roomID, quantity}`), y `roomBlockReason`. Rechaza `reason` en minúsculas y rechaza un `roomID` suelto sin array.
+
+### Comprobar permisos sin escribir nada
+
+Endpoints auxiliares que validan acceso sin modificar datos:
+
+- **`GET /encargado/cloudbeds/permisos`** — llama a cada endpoint de escritura con un id imposible (ej. `roomID: 999999`). Resultado:
+  - HTTP 403 o mensaje sobre "scope" → **falta permiso**.
+  - HTTP 400 o `success: false` quejándose de **datos** → **permiso OK**, es un dato incorrecto.
+  - En el Konk (10-sep-2026): bloquear/desbloquear camas, registrar cobros y notas en reservas están permitidos; modificar reservas da 404; enlaces de pago no verificados.
+
+- **`GET /encargado/cloudbeds/camas`** — vuelca el inventario crudo de Cloudbeds sin procesar (solo lectura).
+
+### Tests para selección de camas
+
+- `test/camas.test.js` — 8 casos sobre la función `elegir()`:
+  - Coincidencia exacta: "R2(1)" → elige R2(1).
+  - Sin tildes: "habitación" → ignora tildes en el inventario.
+  - Ambigüedad: "R2" → devuelve null, el encargado pregunta cuál ("¿R2(1) a R2(6)?").
+  - Nombres compuestos: "Room 6 parejas" → coincide exacto.
+  - Rechazo de parciales: "Room" → no elige nada (podría ser Room 1, 7, 10 o "Room 6 parejas").
+  - Con inventario real del Konk (20 camas).
+
+### Tests para acciones de camas
+
+`test/camas.test.js` — 8 casos sobre elegir la cama correcta, con el inventario
+real del Konk:
+- El nombre exacto manda: "R2(1)" no se confunde con "R2(10)".
+- Se compara sin tildes ni mayúsculas.
+- Ante la duda NO elige: "R2" devuelve las seis candidatas y pregunta.
+- Un tipo entero ("Compartida/Privada 6") también es ambiguo.
+- Lo que no existe se dice claro, y sin nombre no adivina.
+- Una privada con tipo único ("entrada independiente") sí se resuelve sola.
+
+Las salvaguardas de la confirmación (solo el jefe, caducidad, no ejecutar dos
+veces) están en `test/acciones.test.js` y valen para todas las acciones,
+incluidas las de camas.
+
 ### Tests
 
 - `test/encargado.test.js` — 27 casos para F0 y F1; ejecutar con `node test/encargado.test.js`.
 - `test/escucha.test.js` — 18 casos para F2 (validación de webhook, autenticación, filtro de chat/contexto, elección de consulta); ejecutar con `node test/escucha.test.js`.
-- `test/acciones.test.js` — 12 casos para F3:
+- `test/acciones.test.js` — 12+ casos para F3:
   - Propuesta se crea con id único y texto generado en código.
   - Solo el jefe (id en `ENCARGADO_JEFE_ID`) puede confirmar.
   - Sin jefe configurado no se ejecuta nada.
@@ -702,11 +766,16 @@ x-encargado-secret: <ENCARGADO_SECRET>
   - No se ejecuta dos veces (marca como hecha antes de ejecutar).
   - Confirmación falla si la propuesta es desconocida o ya expirada.
   - Las acciones sin riesgo se ejecutan de inmediato tras confirmar.
+  - Bloquear cama: propuesta clara, sin ejecutarse dos veces.
+  - Desbloquear cama: igual, marcada como reversible.
 - `test/ordenes.test.js` — 8 casos para la cola de encargos:
   - Orden se crea y se marca entregada solo por el agente correcto.
   - Órdenes caducadas (>24 h) se limpian automáticamente.
   - Resultado se reporta y persiste en disco.
   - `leer_ordenes_pendientes()` devuelve solo las de ese agente.
+- `test/camas.test.js` — 8 casos para elegir cama correcta:
+  - Coincidencia exacta, ambigüedad, rechazos.
+  - Con inventario real del Konk.
 
 ## Seguridad del webhook de Telegram (F2)
 
@@ -976,16 +1045,16 @@ Resumen diario del estado del hostel (ocupación, llegadas, salidas, prórrogas)
 ### F2: ✅ Escucha de Telegram y respuesta inteligente (10-sep-2026)
 El Encargado atiende preguntas en el grupo de Telegram por webhook. Entiende consultas en lenguaje natural (con Claude si `ANTHROPIC_API_KEY` está, modo palabras clave si no). Consultas soportadas: estado del día, quién llega/se va/está dentro, búsqueda de huésped, estado del equipo, revisión de cobros. Validación de seguridad en 3 niveles (firma de Telegram, chat correcto, contexto de conversación). Completada.
 
-### F3: 🟡 Acciones con confirmación (10-sep-2026)
-El Encargado propone acciones, las muestra en cristiano en Telegram, y Luis confirma antes de ejecutar. Tres salvaguardas claves: solo el jefe confirma (verificación de id), propuestas caducan a los 30 minutos, y no se ejecutan dos veces (marcada antes de ejecutar). Acciones desplegadas: silenciar/reactivar avisos, revisar cobros, preparar lote de facturas (riesgo medio), emitir lote de facturas (riesgo alto). Puente con Mac: servidor entrega órdenes por API (cada 5 min), Mac ejecuta y reporta resultado.
+### F3: ✅ Acciones con confirmación (completada 10-sep-2026, ampliada con camas 11-sep-2026)
+El Encargado propone acciones, las muestra en cristiano en Telegram, y Luis confirma antes de ejecutar. Tres salvaguardas claves: solo el jefe confirma (verificación de id), propuestas caducan a los 30 minutos, y no se ejecutan dos veces (marcada antes de ejecutar). Acciones desplegadas: silenciar/reactivar avisos, revisar cobros, preparar lote de facturas (riesgo medio), emitir lote de facturas (riesgo alto), **bloquear cama (riesgo alto)**, **desbloquear cama (riesgo medio)**. Puente con Mac: servidor entrega órdenes por API (cada 5 min), Mac ejecuta y reporta resultado. Escritura en Cloudbeds acotada a bloquear/desbloquear camas; se conocen las dos trampas principales (formato POST, lectura de `success` aunque HTTP 200) y se proporcionan herramientas de diagnóstico (`GET /encargado/cloudbeds/permisos`, `GET /encargado/cloudbeds/camas`).
 
-**Completada la arquitectura y flujo principal.** Pendiente: escribir en Cloudbeds (cambiar estado de reserva, editar datos de huésped) — será acotado a operaciones reversibles. Rotar las claves sigue pendiente.
+**Arquitectura y flujo completados.** Rotar las claves (`VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY`) sigue pendiente. Ampliaciones futuras: modificar/cancelar reservas, editar datos de huésped (ambas operaciones reversibles).
 
 ### Pendientes administrativos
 - ✅ **Crear los 7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar) — **Hecho el 10-sep-2026.**
 - ✅ **F3 arquitectura e implementación** — **Hecho el 10-sep-2026.** Motor de acciones, salvaguardas, puente con Mac, endpoints, tests.
+- ✅ **Bloquear y desbloquear camas desde F3** — **Hecho el 11-sep-2026.** Inventario del Konk, `src/encargado/inventario.js`, `src/encargado/acciones-camas.js`, dos trampas de Cloudbeds documentadas, herramientas de diagnóstico.
 - Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas (ya están, consultables con `GET /encargado/temas`).
-- **Escribir en Cloudbeds desde F3** — cambiar estado de reserva, editar datos de huésped. Acotado a operaciones reversibles. **Pendiente.**
 - **Rotar las claves** `VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY` (fueron compartidas accidentalmente en sesiones anteriores). **Pendiente.**
 
 ## Tests
