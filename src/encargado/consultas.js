@@ -6,7 +6,7 @@
 // llamar) y como respuestas directas cuando no hay cerebro configurado.
 'use strict';
 
-const { api } = require('../cloudbeds');
+const { todas } = require('./paginado');
 const { recolectar } = require('./recolector');
 const { parteDiario, plural, nombres } = require('./parte');
 const { hoyISO } = require('./reloj');
@@ -32,8 +32,8 @@ function resolverFecha(f) {
 }
 
 async function reservas(params) {
-  const d = await api('GET', '/getReservations', params);
-  return (d.data || [])
+  const filas = await todas('/getReservations', params);
+  return filas
     .map(r => ({
       id: r.reservationID,
       huesped: (r.guestName || `${r.guestFirstName || ''} ${r.guestLastName || ''}`).trim(),

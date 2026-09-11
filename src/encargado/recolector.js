@@ -3,7 +3,7 @@
 // falla, lo dice en el parte en vez de tumbarlo entero.
 'use strict';
 
-const { api } = require('../cloudbeds');
+const { todas } = require('./paginado');
 const { AGENTES } = require('./config');
 const { hoyISO } = require('./reloj');
 const estado = require('./estado');
@@ -24,8 +24,9 @@ function normalizar(r) {
 }
 
 async function reservas(params) {
-  const data = await api('GET', '/getReservations', params);
-  return (data.data || []).map(normalizar).filter(r => VIVAS.has(r.estado));
+  // Paginado: sin esto, "quién está en casa" se quedaba en las 20 primeras.
+  const filas = await todas('/getReservations', params);
+  return filas.map(normalizar).filter(r => VIVAS.has(r.estado));
 }
 
 /**
