@@ -310,13 +310,47 @@ router.get('/cloudbeds/permisos', auth, async (req, res) => {
   }
 });
 
-/** GET /encargado/cloudbeds/bloqueos — los bloqueos puestos, por fechas. */
+/**
+ * GET /encargado/cloudbeds/bloqueos — los bloqueos puestos, por fechas.
+ * Con ?crudo=1 devuelve la respuesta tal cual la da Cloudbeds, que es la
+ * única forma de saber dónde esconde el identificador de la habitación.
+ */
 router.get('/cloudbeds/bloqueos', auth, async (req, res) => {
   try {
+    if (req.query.crudo === '1') {
+      const { api } = require('../cloudbeds');
+      const hoy = new Date().toISOString().slice(0, 10);
+      const fin = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      return res.json({ ok: true, crudo: await api('GET', '/getRoomBlocks',
+        { startDate: req.query.desde || hoy, endDate: req.query.hasta || fin, pageSize: 100 }) });
+    }
     res.json({ ok: true, bloqueos: await require('./inventario').bloqueos({
       desde: req.query.desde, hasta: req.query.hasta }) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
+/**
+ * POST /encargado/cloudbeds/bloqueos/:id/borrar
+ * Quita un bloqueo por su identificador. Vía administrativa: hace falta el
+ * secreto del servidor. Útil para limpiar un bloqueo que no se puede
+ * emparejar con su cama.
+ */
+router.post('/cloudbeds/bloqueos/:id/borrar', auth, async (req, res) => {
+  const { api } = require('../cloudbeds');
+  try {
+    const r = await api('POST', '/deleteRoomBlock', { roomBlockID: req.params.id });
+    if (r && r.success === false) {
+      return res.status(409).json({ ok: false, dijo: r.message || 'rechazado' });
+    }
+    res.json({ ok: true, borrado: req.params.id, respuesta: r });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      codigo: err.response?.status || null,
+      dijo: err.response?.data?.message || err.response?.data || err.message,
+    });
   }
 });
 
