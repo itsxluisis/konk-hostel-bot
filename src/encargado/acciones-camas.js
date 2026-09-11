@@ -25,6 +25,14 @@ function sumarDias(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Los únicos tipos que admite Cloudbeds (enum de postRoomBlock).
+const TIPOS = {
+  out_of_service: 'fuera de servicio (avería, limpieza)',
+  blocked_dates: 'fechas bloqueadas',
+  courtesy_hold: 'reserva provisional de cortesía',
+};
+const TIPO_POR_DEFECTO = 'out_of_service';
+
 function esFecha(f) {
   return /^\d{4}-\d{2}-\d{2}$/.test(f || '');
 }
@@ -61,7 +69,7 @@ registrar('bloquear_cama', {
     desde: 'primera noche AAAA-MM-DD (por defecto hoy)',
     hasta: 'noche de salida AAAA-MM-DD (por defecto mañana)',
     motivo: 'por qué se bloquea',
-    tipo: 'clase de bloqueo (por defecto mantenimiento)',
+    tipo: `clase de bloqueo: ${Object.keys(TIPOS).join(', ')} (por defecto ${TIPO_POR_DEFECTO})`,
   },
   async resumen(args) {
     const r = await resolver(args);
@@ -74,6 +82,7 @@ registrar('bloquear_cama', {
       `⛔ Bloquear ${r.cama.nombre} (${r.cama.tipo})`,
       `   del ${r.desde} al ${r.hasta} · ${plural(n, 'noche', 'noches')}`,
       args.motivo ? `   motivo: ${args.motivo}` : '   sin motivo indicado',
+      `   tipo: ${TIPOS[args.tipo] || TIPOS[TIPO_POR_DEFECTO]}`,
       ``,
       `Esas noches dejan de venderse. Se deshace desbloqueándola.`,
     ].join('\n');
@@ -88,7 +97,9 @@ registrar('bloquear_cama', {
         endDate: r.hasta,
         rooms: [{ roomID: r.cama.id, quantity: 1 }],
         // Cloudbeds exige decir de qué clase es el bloqueo.
-        roomBlockType: args.tipo || process.env.CLOUDBEDS_TIPO_BLOQUEO || 'maintenance',
+        roomBlockType: TIPOS[args.tipo] ? args.tipo
+          : (TIPOS[process.env.CLOUDBEDS_TIPO_BLOQUEO] ? process.env.CLOUDBEDS_TIPO_BLOQUEO
+            : TIPO_POR_DEFECTO),
         roomBlockReason: args.motivo || 'Bloqueada desde el encargado',
       });
     } catch (err) {
@@ -137,4 +148,4 @@ registrar('desbloquear_cama', {
   },
 });
 
-module.exports = { resolver };
+module.exports = { resolver, TIPOS, TIPO_POR_DEFECTO };
