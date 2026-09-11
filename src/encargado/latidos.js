@@ -113,6 +113,7 @@ router.post('/parte', auth, async (req, res) => {
         llegadas: r.foto.llegadas.length,
         salidas: r.foto.salidas.length,
         fallos: r.foto.fallos,
+        reservasLeidas: r.foto.reservasLeidas,
         // En seco devolvemos las listas crudas: sirve para comprobar que
         // los filtros de Cloudbeds hacen lo que creemos.
         detalle: seco ? { llegadas: r.foto.llegadas, salidas: r.foto.salidas } : undefined,

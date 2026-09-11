@@ -109,6 +109,9 @@ async function recolectar(fecha = hoyISO()) {
     });
     foto.enCasa = abiertas.filter(r => r.entrada <= fecha && r.salida > fecha);
     foto.huespedes = foto.enCasa.reduce((n, r) => n + r.personas, 0);
+    // Cuántas reservas se han leído en la ventana: si fueran exactamente 20 o
+    // 100, sospechar de la paginación.
+    foto.reservasLeidas = abiertas.length;
   } catch (err) {
     foto.fallos.push(`No se pudo calcular la ocupación: ${err.message}`);
   }
