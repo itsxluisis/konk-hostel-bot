@@ -690,7 +690,7 @@ x-encargado-secret: <ENCARGADO_SECRET>
   - `limpiar_caducadas()` — rutina interna cada 10 min para purgar órdenes de >24 horas.
   - `get_todas()` — para diagnosticar.
 
-### Bloquear y desbloquear camas (F3 completado)
+### Bloquear y desbloquear camas (F3 completado y verificado 11-sep-2026)
 
 - `src/encargado/inventario.js` — gestión del inventario de camas del Konk. Funciones puras:
   - `camas(soloBloqueadas)` — devuelve array con todas las camas o solo las bloqueadas; caché de 10 minutos desde Cloudbeds.
@@ -698,25 +698,106 @@ x-encargado-secret: <ENCARGADO_SECRET>
   - `buscar(texto)` — busca en el inventario actual; si hay ambigüedad, devuelve la lista; si hay una coincidencia, devuelve la cama.
   - `resumen()` — resumen breve: "20 camas, 3 bloqueadas" (solo lectura).
   
-  **Inventario real del Konk (10-sep-2026):** 20 unidades:
+  **Inventario real del Konk (11-sep-2026):** 20 unidades:
   - **Compartidas (15 camas):** R2(1) a R2(6) tipo "Habitación Compartida/Privada 6" (6 camas); R4(1) a R4(5) tipo "Habitación compartida/privada 6" (5 camas pese al nombre); R5(1) a R5(4) tipo "Habitación Compartida/Privada 4" (4 camas).
   - **Privadas (5 habitaciones):** Room 1 (Doble); Room 7 (Doble); Room 10 (Doble con entrada independiente); "Room 6 parejas" (litera matrimonio, 2 ó 4 personas); R3(1) (Doble adaptada para minusválidos).
   - **Atención:** dos tipos difieren solo por mayúscula ("Compartida/Privada 6" vs "compartida/privada 6"), así que se cuenta lo físico, no el nombre del tipo.
 
 - `src/encargado/acciones-camas.js` — acciones para cambiar estado de camas:
-  - `bloquear_cama(parametros)` — bloqueará un rango de fechas en una cama concreta. Riesgo **alto** porque cierra esa cama; se escribe de verdad en Cloudbeds API endpoint `postRoomBlock`. Propuesta muestra: nombre de la cama, fechas exactas, razón del bloqueo.
-  - `desbloquear_cama(parametros)` — levanta un bloqueo existente. Riesgo **medio** porque es reversible (el bloqueo se borra, la cama vuelve a estar libre). Propuesta muestra: cama, cuál bloqueo se va a deshacer.
+  - `bloquear_cama(parametros)` — bloquea un rango de fechas en una cama concreta. Riesgo **alto** porque cierra esa cama; se escribe de verdad en Cloudbeds API endpoint `postRoomBlock` con `roomBlockID` único. Propuesta muestra: nombre de la cama, fechas exactas, razón del bloqueo.
+  - `desbloquear_cama(parametros)` — levanta un bloqueo existente llamando a `deleteRoomBlock` por su `roomBlockID`. Riesgo **medio** porque es reversible (el bloqueo se borra, la cama vuelve a estar libre). Propuesta muestra: cama, cuál bloqueo se va a deshacer. **Confirmado 11-sep:** el endpoint funciona con el token del Konk; no se requieren permisos especiales fuera de los normales del PMS.
 
 - Consulta nueva en `src/encargado/consultas.js`:
   - `que_camas_hay(soloBloqueadas)` — solo lectura: lista todas las camas o solo las que están bloqueadas en Cloudbeds en la fecha actual o en un rango. Sin parámetros toca que es un booleano true/false.
 
-### Escribir en Cloudbeds — dos trampas importantes
+### Escribir en Cloudbeds — cuatro trampas verificadas en producción (11-sep-2026)
 
 **Trampa 1: Formato de POST.** Cloudbeds admite POST en `x-www-form-urlencoded` (key1=value1&key2=value2) pero **rechaza JSON** con error HTTP 200 + `{"success": false, "message": "Parameter X is required"}` para un parámetro que sí va puesto. El servidor (`src/cloudbeds.js`) convierte los POST a form-urlencoded automáticamente; los GET siguen siendo querystring normal.
 
 **Trampa 2: Éxito aparente.** Cloudbeds **responde siempre HTTP 200**, incluso cuando la acción falló. Ejemplo: bloquear una cama que ya está bloqueada da `{"success": false, "message": "..."}`. Hay que leer **siempre** el campo `success` del body, no solo el código HTTP. El servidor devuelve `{ok: true, success: false, message: "..."}` si algo fue mal; todo handler debe revisar `success`.
 
-**Parámetros de `postRoomBlock` (verificados):** requiere `startDate`, `endDate`, `rooms` (array JSON de `{roomID, quantity}`), y `roomBlockReason`. Rechaza `reason` en minúsculas y rechaza un `roomID` suelto sin array.
+**Trampa 3: `roomBlockType` es obligatorio y restringido.** El parámetro `roomBlockType` es obligatorio en `postRoomBlock` y solo admite exactamente estos tres valores:
+- `out_of_service` (avería, limpieza; es el predeterminado usado por el Konk)
+- `blocked_dates` (bloqueadas por disponibilidad/cerrado)
+- `courtesy_hold` (reserva de cortesía)
+
+Cualquier otro valor se rechaza con HTTP 200 + `{"success": false}`. Se puede elegir con el parámetro `tipo` de `bloquear_cama()` o con la variable de entorno `CLOUDBEDS_TIPO_BLOQUEO`.
+
+**Trampa 4: Arrays en notación de corchetes PHP, no JSON.** Los `rooms[]` deben ir en formato `x-www-form-urlencoded` con **notación de corchetes PHP**:
+```
+rooms[0][roomID]=404780-1&rooms[0][quantity]=1
+```
+**NO** como JSON dentro de un campo:
+```javascript
+rooms: [{ roomID: "404780-1", quantity: 1 }]
+```
+Si se manda como JSON, Cloudbeds responde "At least one room is required" aunque el campo esté completamente puesto. `src/cloudbeds.js` ya aplana automáticamente cualquier array u objeto en los POST.
+
+**Parámetros de `postRoomBlock` (verificados 11-sep):** requiere `startDate` (AAAA-MM-DD), `endDate` (AAAA-MM-DD), `rooms` (en notación de corchetes PHP), `roomBlockType` (enum: `out_of_service`, `blocked_dates`, `courtesy_hold`), y opcionalmente `roomBlockReason` (texto descriptivo).
+
+**Identificación única del bloqueo:** cada bloqueo tiene un `roomBlockID` único. Se usa `roomBlockID` para consultarlo con `getRoomBlocks` y para borrarlo con `deleteRoomBlock`. **No se identifica por roomID ni por fechas**: dos bloqueos distintos pueden tapar el mismo `roomID` en períodos solapados o diferentes.
+
+### Consultar y gestionar bloqueos
+
+**`GET /encargado/cloudbeds/bloqueos`** — lista todos los bloqueos en un rango de fechas (solo lectura).
+
+**Query parameters:**
+- `desde` (opcional) — fecha de inicio en AAAA-MM-DD (por defecto hoy).
+- `hasta` (opcional) — fecha de fin en AAAA-MM-DD (por defecto 120 días adelante).
+- `crudo` (opcional) — si es `1`, devuelve la respuesta tal cual de Cloudbeds sin procesar.
+
+**Ejemplo curl:**
+```bash
+curl "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/cloudbeds/bloqueos?desde=2026-09-11&hasta=2026-12-31" \
+  -H "x-encargado-secret: tu-secret-aqui"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "bloqueos": [
+    {
+      "roomBlockID": "abc123def456",
+      "roomID": "404780-1",
+      "startDate": "2026-09-15",
+      "endDate": "2026-09-18",
+      "roomBlockType": "out_of_service",
+      "roomBlockReason": "Limpieza profunda"
+    }
+  ]
+}
+```
+
+**Nota sobre rangos:** `getRoomBlocks` de Cloudbeds no admite rangos de más de 35 días. `src/encargado/inventario.js` recorre el período por tramos de 30 días y deduplica por `roomBlockID` porque los tramos se solapan. Por defecto consulta 120 días hacia adelante.
+
+**Nota sobre la lectura de bloqueos:** el campo `roomBlocked` de `getRooms` significa "bloqueada HOY", no "tiene bloqueos futuros". Un bloqueo para el mes que viene no marca `roomBlocked: true` hoy. Por eso las consultas de estado usan `getRoomBlocks` en lugar de `getRooms`.
+
+---
+
+**`POST /encargado/cloudbeds/bloqueos/:id/borrar`** — borra un bloqueo existente por su `roomBlockID` (requiere autenticación administrativa).
+
+**Headers:**
+```
+x-encargado-secret: <ENCARGADO_SECRET>
+```
+
+**Ejemplo curl:**
+```bash
+curl -X POST "https://rentalme-konk-bot-webhook.sklshk.easypanel.host/encargado/cloudbeds/bloqueos/abc123def456/borrar" \
+  -H "x-encargado-secret: tu-secret-aqui"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "roomBlockID": "abc123def456",
+  "borrado": true
+}
+```
+
+---
 
 ### Comprobar permisos sin escribir nada
 
@@ -725,7 +806,7 @@ Endpoints auxiliares que validan acceso sin modificar datos:
 - **`GET /encargado/cloudbeds/permisos`** — llama a cada endpoint de escritura con un id imposible (ej. `roomID: 999999`). Resultado:
   - HTTP 403 o mensaje sobre "scope" → **falta permiso**.
   - HTTP 400 o `success: false` quejándose de **datos** → **permiso OK**, es un dato incorrecto.
-  - En el Konk (10-sep-2026): bloquear/desbloquear camas, registrar cobros y notas en reservas están permitidos; modificar reservas da 404; enlaces de pago no verificados.
+  - En el Konk (11-sep-2026): bloquear/desbloquear camas, registrar cobros y notas en reservas están permitidos; modificar reservas da 404; enlaces de pago no verificados. **Desbloquear (`deleteRoomBlock`) confirmado funcional con el token del Konk.**
 
 - **`GET /encargado/cloudbeds/camas`** — vuelca el inventario crudo de Cloudbeds sin procesar (solo lectura).
 
@@ -1045,15 +1126,17 @@ Resumen diario del estado del hostel (ocupación, llegadas, salidas, prórrogas)
 ### F2: ✅ Escucha de Telegram y respuesta inteligente (10-sep-2026)
 El Encargado atiende preguntas en el grupo de Telegram por webhook. Entiende consultas en lenguaje natural (con Claude si `ANTHROPIC_API_KEY` está, modo palabras clave si no). Consultas soportadas: estado del día, quién llega/se va/está dentro, búsqueda de huésped, estado del equipo, revisión de cobros. Validación de seguridad en 3 niveles (firma de Telegram, chat correcto, contexto de conversación). Completada.
 
-### F3: ✅ Acciones con confirmación (completada 10-sep-2026, ampliada con camas 11-sep-2026)
-El Encargado propone acciones, las muestra en cristiano en Telegram, y Luis confirma antes de ejecutar. Tres salvaguardas claves: solo el jefe confirma (verificación de id), propuestas caducan a los 30 minutos, y no se ejecutan dos veces (marcada antes de ejecutar). Acciones desplegadas: silenciar/reactivar avisos, revisar cobros, preparar lote de facturas (riesgo medio), emitir lote de facturas (riesgo alto), **bloquear cama (riesgo alto)**, **desbloquear cama (riesgo medio)**. Puente con Mac: servidor entrega órdenes por API (cada 5 min), Mac ejecuta y reporta resultado. Escritura en Cloudbeds acotada a bloquear/desbloquear camas; se conocen las dos trampas principales (formato POST, lectura de `success` aunque HTTP 200) y se proporcionan herramientas de diagnóstico (`GET /encargado/cloudbeds/permisos`, `GET /encargado/cloudbeds/camas`).
+### F3: ✅ Acciones con confirmación (completada 10-sep-2026, verificada en producción 11-sep-2026)
+El Encargado propone acciones, las muestra en cristiano en Telegram, y Luis confirma antes de ejecutar. Tres salvaguardas claves: solo el jefe confirma (verificación de id), propuestas caducan a los 30 minutos, y no se ejecutan dos veces (marcada antes de ejecutar). Acciones desplegadas: silenciar/reactivar avisos, revisar cobros, preparar lote de facturas (riesgo medio), emitir lote de facturas (riesgo alto), **bloquear cama (riesgo alto)**, **desbloquear cama (riesgo medio)**. Puente con Mac: servidor entrega órdenes por API (cada 5 min), Mac ejecuta y reporta resultado. Escritura en Cloudbeds acotada a bloquear/desbloquear camas; **ciclo completo verificado 11-sep-2026 (bloquear → ver → desbloquear por nombre → limpio)**. Se conocen las cuatro trampas de Cloudbeds (formato POST, lectura de `success`, `roomBlockType` obligatorio, arrays en corchetes PHP) y se proporcionan herramientas de diagnóstico (`GET /encargado/cloudbeds/permisos`, `GET /encargado/cloudbeds/camas`, `GET /encargado/cloudbeds/bloqueos`).
 
-**Arquitectura y flujo completados.** Rotar las claves (`VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY`) sigue pendiente. Ampliaciones futuras: modificar/cancelar reservas, editar datos de huésped (ambas operaciones reversibles).
+**Arquitectura y flujo completados y verificados en producción.** Nota operativa sobre **EasyPanel**: si se pulsa Deploy justo después de un push, a veces construye el penúltimo commit. Solución: un commit vacío + push fuerza el redespliegue correcto. El auto-deploy por webhook se durmió tras ~25 despliegues en un día.
+
+Pendientes administrativos: rotar las claves (`VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY`) que fueron compartidas en sesiones anteriores. Ampliaciones futuras sin confirmar: modificar reservas (el endpoint `putReservation` da 404, probablemente se llama de otra forma) y enlaces de pago.
 
 ### Pendientes administrativos
 - ✅ **Crear los 7 temas en el grupo de Telegram** del Konk (Estado, Parte, Alertas, Llamadas, Cobros, Facturas, Preguntar) — **Hecho el 10-sep-2026.**
 - ✅ **F3 arquitectura e implementación** — **Hecho el 10-sep-2026.** Motor de acciones, salvaguardas, puente con Mac, endpoints, tests.
-- ✅ **Bloquear y desbloquear camas desde F3** — **Hecho el 11-sep-2026.** Inventario del Konk, `src/encargado/inventario.js`, `src/encargado/acciones-camas.js`, dos trampas de Cloudbeds documentadas, herramientas de diagnóstico.
+- ✅ **Bloquear y desbloquear camas desde F3** — **Hecho el 11-sep-2026 y verificado en producción.** Inventario del Konk, `src/encargado/inventario.js`, `src/encargado/acciones-camas.js`, cuatro trampas de Cloudbeds documentadas (formato POST, `success`, `roomBlockType`, arrays en corchetes PHP), herramientas de diagnóstico (`GET /encargado/cloudbeds/bloqueos`, endpoints de borrado). Ciclo completo: bloquear → ver → desbloquear por nombre → limpio. Confirmado: `deleteRoomBlock` funciona con token del Konk.
 - Rellenar `TG_TEMA_*` en `.env` de EasyPanel con los IDs de los temas (ya están, consultables con `GET /encargado/temas`).
 - **Rotar las claves** `VAPI_API_KEY`, `VAPI_SECRET`, `ANTHROPIC_API_KEY` (fueron compartidas accidentalmente en sesiones anteriores). **Pendiente.**
 
