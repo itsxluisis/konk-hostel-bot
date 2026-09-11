@@ -113,38 +113,52 @@ registrar('bloquear_cama', {
   },
 });
 
+/** Los bloqueos puestos sobre una cama, mirando por fechas (no solo hoy). */
+async function bloqueosDe(nombreCama) {
+  const r = await inventario.buscar(nombreCama);
+  if (!r.cama) return { imposible: true, motivo: r.varias && r.varias.length
+    ? `"${nombreCama}" encaja con varias: ${r.varias.map(c => c.nombre).join(', ')}. Dime cuál.`
+    : r.motivo };
+  const todos = await inventario.bloqueos();
+  const suyos = todos.filter(b =>
+    (b.roomID && String(b.roomID) === String(r.cama.id))
+    || (b.nombre && inventario.normalizar(b.nombre) === inventario.normalizar(r.cama.nombre)));
+  return { cama: r.cama, bloqueos: suyos };
+}
+
 registrar('desbloquear_cama', {
   riesgo: 'medio',
   descripcion: 'Quita el bloqueo de una cama para que vuelva a venderse.',
   parametros: { cama: 'nombre de la cama, como R2(3)' },
   async resumen({ cama }) {
-    const r = await inventario.buscar(cama);
-    if (!r.cama) {
-      if (r.varias && r.varias.length) {
-        return { imposible: true, motivo: `"${cama}" encaja con varias:`
-          + ` ${r.varias.map(c => c.nombre).join(', ')}. Dime cuál.` };
-      }
-      return { imposible: true, motivo: r.motivo };
+    const r = await bloqueosDe(cama);
+    if (r.imposible) return r;
+    if (!r.bloqueos.length) {
+      return { imposible: true, motivo: `${r.cama.nombre} no tiene ningún bloqueo puesto.` };
     }
-    if (!r.cama.bloqueada) {
-      return { imposible: true, motivo: `${r.cama.nombre} no está bloqueada.` };
-    }
-    return `🔓 Desbloquear ${r.cama.nombre} (${r.cama.tipo}) para que vuelva a venderse.`;
+    const lineas = r.bloqueos.map(b =>
+      `   · del ${b.desde} al ${b.hasta}${b.motivo ? ` — «${b.motivo}»` : ''}`);
+    return `🔓 Quitar ${plural(r.bloqueos.length, 'bloqueo', 'bloqueos')} de ${r.cama.nombre}:\n`
+      + lineas.join('\n') + `\n\nEsas noches vuelven a venderse.`;
   },
   async ejecutar({ cama }) {
-    const r = await inventario.buscar(cama);
-    if (!r.cama) return 'Ya no encuentro esa cama.';
-    let res;
-    try {
-      res = await api('POST', '/deleteRoomBlock', { roomID: r.cama.id });
-    } catch (err) {
-      throw new Error(porQue(err));
-    }
-    if (res && res.success === false) {
-      throw new Error(res.message || 'Cloudbeds lo ha rechazado');
+    const r = await bloqueosDe(cama);
+    if (r.imposible) return `Ya no se puede: ${r.motivo}`;
+    if (!r.bloqueos.length) return `${r.cama.nombre} no tiene bloqueos.`;
+
+    const hechos = [];
+    for (const b of r.bloqueos) {
+      try {
+        // deleteRoomBlock identifica el bloqueo por su id, no por la cama.
+        const res = await api('POST', '/deleteRoomBlock', { roomBlockID: b.id });
+        if (res && res.success === false) throw new Error(res.message || 'rechazado');
+        hechos.push(`   ✅ ${b.desde} → ${b.hasta}`);
+      } catch (err) {
+        hechos.push(`   ❌ ${b.desde} → ${b.hasta}: ${porQue(err)}`);
+      }
     }
     await inventario.camas({ refrescar: true });
-    return `🔓 ${r.cama.nombre} vuelve a estar disponible.`;
+    return `🔓 ${r.cama.nombre}:\n${hechos.join('\n')}`;
   },
 });
 

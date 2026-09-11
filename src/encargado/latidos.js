@@ -310,6 +310,16 @@ router.get('/cloudbeds/permisos', auth, async (req, res) => {
   }
 });
 
+/** GET /encargado/cloudbeds/bloqueos — los bloqueos puestos, por fechas. */
+router.get('/cloudbeds/bloqueos', auth, async (req, res) => {
+  try {
+    res.json({ ok: true, bloqueos: await require('./inventario').bloqueos({
+      desde: req.query.desde, hasta: req.query.hasta }) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
 /** GET /encargado/cloudbeds/camas — el inventario real, para poder bloquear. */
 router.get('/cloudbeds/camas', auth, async (req, res) => {
   const { api } = require('../cloudbeds');

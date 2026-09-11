@@ -78,4 +78,40 @@ async function resumen() {
   return { total: todas.length, grupos: [...porTipo.values()] };
 }
 
-module.exports = { camas, buscar, elegir, resumen, normalizar };
+/**
+ * Los bloqueos de verdad, por fechas.
+ *
+ * OJO: el campo roomBlocked de getRooms dice si la cama está bloqueada HOY,
+ * no si tiene bloqueos futuros. Para saber qué hay puesto hay que preguntar
+ * por getRoomBlocks en un rango.
+ */
+async function bloqueos({ desde, hasta } = {}) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const d = desde || hoy;
+  const h = hasta || (() => {
+    const x = new Date(`${hoy}T12:00:00Z`);
+    x.setUTCDate(x.getUTCDate() + 180);
+    return x.toISOString().slice(0, 10);
+  })();
+
+  const r = await api('GET', '/getRoomBlocks', { startDate: d, endDate: h, pageSize: 100 });
+  const data = r?.data;
+  const grupos = Array.isArray(data) ? data : (data ? [data] : []);
+  const salida = [];
+  for (const g of grupos) {
+    for (const b of (g?.roomBlocks || [])) {
+      salida.push({
+        id: b.roomBlockID,
+        roomID: b.roomID || null,
+        nombre: b.roomName || null,
+        desde: b.startDate,
+        hasta: b.endDate,
+        tipo: b.roomBlockType || null,
+        motivo: (b.roomBlockReason || '').trim(),
+      });
+    }
+  }
+  return salida;
+}
+
+module.exports = { camas, buscar, elegir, resumen, normalizar, bloqueos };
