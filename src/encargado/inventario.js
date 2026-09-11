@@ -15,20 +15,30 @@ const VIDA_MS = 10 * 60 * 1000;   // el inventario cambia poco
 
 async function camas({ refrescar = false } = {}) {
   if (!refrescar && cache && Date.now() - cuando < VIDA_MS) return cache;
-  const r = await api('GET', '/getRooms', {});
-  const bloques = r?.data || [];
+  // getRooms PAGINA: la primera respuesta traía 20 de 31 unidades y el
+  // encargado se quedó sin ver la sexta cama del dormitorio 4. Se recorren
+  // todas las páginas hasta que una venga corta.
   const lista = [];
-  for (const b of bloques) {
-    for (const x of (b.rooms || [])) {
-      lista.push({
-        id: x.roomID,
-        nombre: x.roomName,
-        tipo: x.roomTypeName,
-        privada: Boolean(x.isPrivate),
-        bloqueada: Boolean(x.roomBlocked),
-        plazas: Number(x.maxGuests) || null,
-      });
+  const TAM = 100;
+  for (let pagina = 1; pagina <= 20; pagina++) {
+    const r = await api('GET', '/getRooms', { pageNumber: pagina, pageSize: TAM });
+    const bloques = r?.data || [];
+    let vistas = 0;
+    for (const b of bloques) {
+      for (const x of (b.rooms || [])) {
+        vistas++;
+        lista.push({
+          id: x.roomID,
+          nombre: x.roomName,
+          tipo: x.roomTypeName,
+          privada: Boolean(x.isPrivate),
+          bloqueada: Boolean(x.roomBlocked),
+          plazas: Number(x.maxGuests) || null,
+        });
+      }
     }
+    const total = Number(r?.total) || 0;
+    if (vistas === 0 || vistas < TAM || lista.length >= total) break;
   }
   cache = lista;
   cuando = Date.now();

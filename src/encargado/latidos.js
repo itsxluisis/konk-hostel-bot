@@ -358,8 +358,9 @@ router.post('/cloudbeds/bloqueos/:id/borrar', auth, async (req, res) => {
 router.get('/cloudbeds/camas', auth, async (req, res) => {
   const { api } = require('../cloudbeds');
   try {
-    const r = await api('GET', '/getRooms', {});
-    res.json({ ok: true, crudo: r });
+    const lista = await require('./inventario').camas({ refrescar: true });
+    const r = await api('GET', '/getRooms', { pageNumber: 1, pageSize: 100 });
+    res.json({ ok: true, unidades: lista.length, total: r?.total, camas: lista, crudo: r });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.response?.data || err.message });
   }
