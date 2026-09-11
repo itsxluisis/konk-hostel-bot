@@ -12,6 +12,13 @@ const { plural } = require('./parte');
 const { hoyISO } = require('./reloj');
 const inventario = require('./inventario');
 
+/** El mensaje de Cloudbeds, no el genérico de axios. */
+function porQue(err) {
+  const d = err.response?.data;
+  return (d?.message || d?.error || (typeof d === 'string' ? d : '') || err.message)
+    .toString().slice(0, 300);
+}
+
 function sumarDias(iso, n) {
   const d = new Date(`${iso}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -73,12 +80,17 @@ registrar('bloquear_cama', {
   async ejecutar(args) {
     const r = await resolver(args);
     if (r.imposible) return `Ya no se puede: ${r.motivo}`;
-    const res = await api('POST', '/postRoomBlock', {
-      startDate: r.desde,
-      endDate: r.hasta,
-      rooms: JSON.stringify([{ roomID: r.cama.id, quantity: 1 }]),
-      reason: args.motivo || 'Bloqueada desde el encargado',
-    });
+    let res;
+    try {
+      res = await api('POST', '/postRoomBlock', {
+        startDate: r.desde,
+        endDate: r.hasta,
+        rooms: [{ roomID: r.cama.id, quantity: 1 }],
+        reason: args.motivo || 'Bloqueada desde el encargado',
+      });
+    } catch (err) {
+      throw new Error(porQue(err));
+    }
     if (res && res.success === false) {
       throw new Error(res.message || 'Cloudbeds lo ha rechazado');
     }
@@ -108,7 +120,12 @@ registrar('desbloquear_cama', {
   async ejecutar({ cama }) {
     const r = await inventario.buscar(cama);
     if (!r.cama) return 'Ya no encuentro esa cama.';
-    const res = await api('POST', '/deleteRoomBlock', { roomID: r.cama.id });
+    let res;
+    try {
+      res = await api('POST', '/deleteRoomBlock', { roomID: r.cama.id });
+    } catch (err) {
+      throw new Error(porQue(err));
+    }
     if (res && res.success === false) {
       throw new Error(res.message || 'Cloudbeds lo ha rechazado');
     }

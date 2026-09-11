@@ -92,12 +92,28 @@ async function api(method, path, params = {}) {
   const token = await getToken();
   const propertyId = process.env.CLOUDBEDS_PROPERTY_ID;
 
+  // Cloudbeds espera los POST como FORMULARIO, no como JSON. Enviándolos en
+  // JSON contesta 200 con success:false y "Parameter X is required" aunque el
+  // parámetro vaya puesto: no llega a leerlo. Cuesta horas descubrirlo.
+  let cuerpo;
+  if (method !== 'GET') {
+    const form = new URLSearchParams();
+    for (const [k, v] of Object.entries({ propertyID: propertyId, ...params })) {
+      if (v === undefined || v === null) continue;
+      form.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+    }
+    cuerpo = form;
+  }
+
   const res = await axios({
     method,
     url: `https://hotels.cloudbeds.com/api/v1.2${path}`,
-    headers: { Authorization: `Bearer ${token}` },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(cuerpo ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+    },
     params: method === 'GET' ? { propertyID: propertyId, ...params } : undefined,
-    data: method !== 'GET' ? { propertyID: propertyId, ...params } : undefined,
+    data: cuerpo,
   });
 
   return res.data;
