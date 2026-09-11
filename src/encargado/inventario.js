@@ -111,10 +111,11 @@ async function bloqueos({ desde, hasta, dias = 120 } = {}) {
       for (const b of (g?.roomBlocks || [])) {
         if (vistos.has(b.roomBlockID)) continue;   // se solapan los tramos
         vistos.add(b.roomBlockID);
+        // Un bloqueo puede tapar varias camas a la vez: van en rooms[].
+        const roomIDs = (b.rooms || []).map(x => String(x.roomID)).filter(Boolean);
         salida.push({
           id: b.roomBlockID,
-          roomID: b.roomID || null,
-          nombre: b.roomName || null,
+          roomIDs,
           desde: b.startDate,
           hasta: b.endDate,
           tipo: b.roomBlockType || null,

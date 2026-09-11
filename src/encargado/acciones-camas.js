@@ -120,9 +120,13 @@ async function bloqueosDe(nombreCama) {
     ? `"${nombreCama}" encaja con varias: ${r.varias.map(c => c.nombre).join(', ')}. Dime cuál.`
     : r.motivo };
   const todos = await inventario.bloqueos();
-  const suyos = todos.filter(b =>
-    (b.roomID && String(b.roomID) === String(r.cama.id))
-    || (b.nombre && inventario.normalizar(b.nombre) === inventario.normalizar(r.cama.nombre)));
+  const suyos = todos.filter(b => b.roomIDs.includes(String(r.cama.id)));
+  // Para avisar si un bloqueo tapa más camas que la pedida.
+  const camas = await inventario.camas();
+  const nombreDe = id => (camas.find(c => String(c.id) === String(id)) || {}).nombre || id;
+  suyos.forEach(b => {
+    b.otras = b.roomIDs.filter(id => String(id) !== String(r.cama.id)).map(nombreDe);
+  });
   return { cama: r.cama, bloqueos: suyos };
 }
 
@@ -137,7 +141,8 @@ registrar('desbloquear_cama', {
       return { imposible: true, motivo: `${r.cama.nombre} no tiene ningún bloqueo puesto.` };
     }
     const lineas = r.bloqueos.map(b =>
-      `   · del ${b.desde} al ${b.hasta}${b.motivo ? ` — «${b.motivo}»` : ''}`);
+      `   · del ${b.desde} al ${b.hasta}${b.motivo ? ` — «${b.motivo}»` : ''}`
+      + (b.otras.length ? `\n     ⚠️ ese bloqueo tapa también ${b.otras.join(', ')}: se quita entero` : ''));
     return `🔓 Quitar ${plural(r.bloqueos.length, 'bloqueo', 'bloqueos')} de ${r.cama.nombre}:\n`
       + lineas.join('\n') + `\n\nEsas noches vuelven a venderse.`;
   },
