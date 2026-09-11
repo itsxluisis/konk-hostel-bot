@@ -98,9 +98,20 @@ async function api(method, path, params = {}) {
   let cuerpo;
   if (method !== 'GET') {
     const form = new URLSearchParams();
+    // Cloudbeds es PHP: los arrays van en notación de corchetes
+    // (rooms[0][roomID]=...), no como JSON dentro de un campo.
+    const aplanar = (clave, valor) => {
+      if (valor === undefined || valor === null) return;
+      if (Array.isArray(valor)) {
+        valor.forEach((v, i) => aplanar(`${clave}[${i}]`, v));
+      } else if (typeof valor === 'object') {
+        for (const [k, v] of Object.entries(valor)) aplanar(`${clave}[${k}]`, v);
+      } else {
+        form.append(clave, String(valor));
+      }
+    };
     for (const [k, v] of Object.entries({ propertyID: propertyId, ...params })) {
-      if (v === undefined || v === null) continue;
-      form.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+      aplanar(k, v);
     }
     cuerpo = form;
   }
