@@ -86,7 +86,7 @@ registrar('bloquear_cama', {
         startDate: r.desde,
         endDate: r.hasta,
         rooms: [{ roomID: r.cama.id, quantity: 1 }],
-        reason: args.motivo || 'Bloqueada desde el encargado',
+        roomBlockReason: args.motivo || 'Bloqueada desde el encargado',
       });
     } catch (err) {
       throw new Error(porQue(err));
