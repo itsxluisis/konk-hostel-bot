@@ -13,19 +13,30 @@ const agenda = require('./agenda');
 const escucha = require('./escucha');
 const cerebro = require('./cerebro');
 const { send } = require('../telegram');
+const { matchesConfiguredSecret, timingSafeEqualStr } = require('../secret-auth');
 
 const router = express.Router();
 
-// Mismo secreto que el resto del servidor (VAPI_SECRET), por cabecera o body.
+// Con ENCARGADO_SECRET propio, compara SOLO contra ese valor (timing-safe).
+// Sin él, cae en VAPI_SECRET por compatibilidad — y para que rotar
+// VAPI_SECRET no deje fuera a los agentes del Mac, acepta también
+// VAPI_SECRET_PREVIOUS mientras dure la rotación (ver src/secret-auth.js,
+// mismo mecanismo que vapiAuth en src/server.js). Recomendado: fijar
+// ENCARGADO_SECRET antes de rotar (ver docs/encargado.md).
 function auth(req, res, next) {
-  const secreto = process.env.ENCARGADO_SECRET || process.env.VAPI_SECRET;
-  if (!secreto) return res.status(503).json({ error: 'Encargado sin secreto configurado' });
   const dado = (req.headers['x-encargado-secret']
     || req.headers['x-vapi-secret']
     || (req.headers.authorization || '').replace('Bearer ', '')
     || req.body?.secreto || '').trim();
-  if (dado !== secreto) return res.status(401).json({ error: 'Unauthorized' });
-  next();
+
+  if (process.env.ENCARGADO_SECRET) {
+    if (dado && timingSafeEqualStr(dado, process.env.ENCARGADO_SECRET)) return next();
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (!process.env.VAPI_SECRET) return res.status(503).json({ error: 'Encargado sin secreto configurado' });
+  if (matchesConfiguredSecret(dado, process.env.VAPI_SECRET, process.env.VAPI_SECRET_PREVIOUS)) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 /**

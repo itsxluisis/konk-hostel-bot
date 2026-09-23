@@ -26,6 +26,8 @@ Ejemplos de ventana esperada:
 
 Todos los endpoints usan el header `x-encargado-secret` (o fallback a `x-vapi-secret`). Si no está configurado en `.env`, la revisión periódica fuerza una autenticación HTTP Basic interna.
 
+**Rotación de VAPI_SECRET (V1, sep-2026):** fija `ENCARGADO_SECRET` (distinto de `VAPI_SECRET`) antes de cualquier rotación. Mientras no exista, el Encargado cae en `VAPI_SECRET` por compatibilidad — y durante una rotación acepta tanto `VAPI_SECRET` como `VAPI_SECRET_PREVIOUS`, para que los agentes del Mac no se queden fuera si Luis cambia `VAPI_SECRET` sin haber fijado antes un `ENCARGADO_SECRET` propio. Con `ENCARGADO_SECRET` definido, la comparación es solo contra ese valor (no admite `VAPI_SECRET`/`VAPI_SECRET_PREVIOUS`). `/health` expone `encargadoSecretDedicated` (booleano) para saber si ya hay uno propio.
+
 ### Persistencia
 
 El estado de latidos vive en `ENCARGADO_DATA_DIR/encargado.json` (por defecto `./data/encargado.json`). Persiste entre reinicios del servidor.
