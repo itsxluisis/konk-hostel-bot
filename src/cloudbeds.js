@@ -7,6 +7,40 @@ const axios = require('axios');
 const BASE = 'https://hotels.cloudbeds.com';
 const TOKEN_URL = 'https://hotels.cloudbeds.com/api/v1.2/access_token';
 
+// ─── Error tipado: distingue "Cloudbeds falló" de "0 disponibilidad" ─────────
+// kind: 'auth' (token/refresco) | 'http' (no-2xx) | 'timeout' | 'network' | 'payload' (200 con success:false)
+// Usado hoy solo por getAvailability() — no cambia lo que lanzan api()/
+// refreshAccessToken() para el resto de consumidores (vigilante, permisos,
+// acciones de cama), que ya leen err.response.status/data directamente.
+class CloudbedsApiError extends Error {
+  constructor(message, kind) {
+    super(message);
+    this.name = 'CloudbedsApiError';
+    this.kind = kind;
+  }
+}
+
+// Clasifica un error crudo (de axios, o ya un CloudbedsApiError) para
+// getAvailability(). No se usa dentro de api(): ese helper es compartido por
+// otros módulos que dependen del err.response original.
+function classifyAvailabilityError(err) {
+  if (err instanceof CloudbedsApiError) return err;
+  const msg = err?.message || 'Error desconocido consultando Cloudbeds';
+  if (err?.code === 'ECONNABORTED' || /timeout/i.test(msg)) {
+    return new CloudbedsApiError(`Timeout consultando Cloudbeds: ${msg}`, 'timeout');
+  }
+  if (err?.response) {
+    const status = err.response.status;
+    const kind = (status === 401 || status === 403) ? 'auth' : 'http';
+    const body = err.response.data ? JSON.stringify(err.response.data).slice(0, 200) : '';
+    return new CloudbedsApiError(`HTTP ${status} de Cloudbeds${body ? ': ' + body : ''}`, kind);
+  }
+  if (err?.request) {
+    return new CloudbedsApiError(`Sin respuesta de Cloudbeds (red): ${msg}`, 'network');
+  }
+  return new CloudbedsApiError(msg, 'network');
+}
+
 // Estado en memoria
 let accessToken = process.env.CLOUDBEDS_ACCESS_TOKEN || null;
 let refreshToken = process.env.CLOUDBEDS_REFRESH_TOKEN || null;
@@ -125,6 +159,10 @@ async function api(method, path, params = {}) {
     },
     params: method === 'GET' ? { propertyID: propertyId, ...params } : undefined,
     data: cuerpo,
+    // Sin esto, una Cloudbeds colgada deja el request esperando indefinidamente
+    // (el bot de voz solo tiene 8s de margen por tool call). No cambia la forma
+    // del error para el resto de consumidores (siguen viendo err.response igual).
+    timeout: 6000,
   });
 
   return res.data;
@@ -139,11 +177,29 @@ async function getAvailability(checkinDate, checkoutDate, guests = 1) {
     const d2 = new Date(checkoutDate);
     const nights = Math.max(1, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)));
 
+    // Token explícito primero: si falla el refresco, es inequívocamente un
+    // problema de auth (no se confunde con un HTTP genérico de los GET de abajo).
+    // No tocamos getToken()/refreshAccessToken(): otros módulos (permisos,
+    // vigilante, acciones de cama) siguen viendo el error crudo tal cual.
+    try {
+      await getToken();
+    } catch (err) {
+      throw new CloudbedsApiError(`Fallo al obtener/refrescar el token de Cloudbeds: ${err.message}`, 'auth');
+    }
+
     // Llamadas en paralelo
     const [availData, typesData] = await Promise.all([
       api('GET', '/getAvailableRoomTypes', { startDate: checkinDate, endDate: checkoutDate }),
       api('GET', '/getRoomTypes', {}),
     ]);
+
+    // Cloudbeds contesta SIEMPRE HTTP 200, incluso cuando algo va mal
+    // (ver docs/encargado.md "Trampa 2"): sin leer success, un fallo de la
+    // API se confunde con "0 habitaciones disponibles".
+    if (availData?.success === false || typesData?.success === false) {
+      const detalle = availData?.message || typesData?.message || 'Cloudbeds devolvió success:false';
+      throw new CloudbedsApiError(`Cloudbeds success:false — ${detalle}`, 'payload');
+    }
 
     const propertyData = availData.data?.[0];
     if (!propertyData?.propertyRooms?.length) {
@@ -233,7 +289,9 @@ async function getAvailability(checkinDate, checkoutDate, guests = 1) {
       console.error('[Cloudbeds] status:', err.response.status);
       console.error('[Cloudbeds] data:', JSON.stringify(err.response.data || '').slice(0, 300));
     }
-    throw err;
+    const classified = classifyAvailabilityError(err);
+    console.error(`[Cloudbeds] getAvailability clasificado como kind=${classified.kind}`);
+    throw classified;
   }
 }
 
@@ -289,4 +347,4 @@ async function getReservationsByDate(date) {
   }
 }
 
-module.exports = { exchangeCode, getAvailability, getAvailabilityDebug, getAuthUrl, getToken, getReservationsByDate, api };
+module.exports = { exchangeCode, getAvailability, getAvailabilityDebug, getAuthUrl, getToken, getReservationsByDate, api, CloudbedsApiError };
