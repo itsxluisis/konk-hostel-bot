@@ -1,0 +1,34 @@
+name: Diag tools (read-only)
+
+# Diagnóstico de solo lectura: lista las tools del assistant de Vapi (nombre
+# y si tienen server.secret configurado), sin volcar ningún valor de secreto.
+# No modifica nada en Vapi. Creado por el auditor para investigar H7
+# (¿get_weather tiene secret como get_availability/report_incident?).
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Listar tools del assistant (solo name + secretSet)
+        env:
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          ASSISTANT_ID: ${{ secrets.VAPI_ASSISTANT_ID }}
+        run: |
+          set -euo pipefail
+          A=$(curl -s "https://api.vapi.ai/assistant/$ASSISTANT_ID" -H "Authorization: Bearer $VAPI_API_KEY")
+
+          echo "=== Tools inline en model.tools ==="
+          echo "$A" | jq '[.model.tools[]? | {name: .function.name, secretSet: ((.server.secret // "") != "")}]'
+
+          echo "=== toolIds referenciados en model.toolIds ==="
+          TOOL_IDS=$(echo "$A" | jq -r '.model.toolIds[]? // empty')
+          if [ -z "$TOOL_IDS" ]; then
+            echo "(ninguno)"
+          else
+            for id in $TOOL_IDS; do
+              T=$(curl -s "https://api.vapi.ai/tool/$id" -H "Authorization: Bearer $VAPI_API_KEY")
+              echo "$T" | jq --arg id "$id" '{id: $id, name: .function.name, secretSet: ((.server.secret // "") != "")}'
+            done
+          fi
