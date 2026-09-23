@@ -4,6 +4,8 @@
 // Módulo puro: sin red, sin disco, para poder testearlo sin arrancar el servidor.
 'use strict';
 
+const crypto = require('crypto');
+
 /** Quita el prefijo "Bearer " si lo hay (case-insensitive). */
 function normalizeBearer(raw) {
   if (typeof raw !== 'string') return raw;
@@ -11,16 +13,33 @@ function normalizeBearer(raw) {
 }
 
 /**
- * true si `provided` (con o sin prefijo Bearer) coincide con `current` o,
- * si está definido, con `previous`. Nunca compara contra valores vacíos —
- * un `current`/`previous` vacío o undefined jamás produce un "match".
+ * Compara dos strings en tiempo constante (crypto.timingSafeEqual), para no
+ * filtrar por temporización cuánto de un secreto ha acertado un atacante.
+ * Si las longitudes difieren, rechaza sin comparar — timingSafeEqual exige
+ * buffers del mismo tamaño o lanza, así que este es el único atajo posible
+ * (comparar secretos de longitud distinta ya no es un secreto que se pueda
+ * adivinar carácter a carácter, así que no hace falta ocultar esa diferencia).
+ */
+function timingSafeEqualStr(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * true si `provided` (con o sin prefijo Bearer) coincide, en tiempo
+ * constante, con `current` o, si está definido, con `previous`. Nunca
+ * compara contra valores vacíos — un `current`/`previous` vacío o
+ * undefined jamás produce un "match".
  */
 function matchesConfiguredSecret(provided, current, previous) {
   const p = normalizeBearer(provided);
   if (!p) return false;
-  if (current && p === current) return true;
-  if (previous && p === previous) return true;
+  if (current && timingSafeEqualStr(p, current)) return true;
+  if (previous && timingSafeEqualStr(p, previous)) return true;
   return false;
 }
 
-module.exports = { normalizeBearer, matchesConfiguredSecret };
+module.exports = { normalizeBearer, matchesConfiguredSecret, timingSafeEqualStr };

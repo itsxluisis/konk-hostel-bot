@@ -10,6 +10,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { timingSafeEqualStr } = require('./secret-auth');
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 horas
 
@@ -55,7 +56,9 @@ function checkBasicAuth(headerValue, adminUser, adminPass) {
   if (idx === -1) return false;
   const user = decoded.slice(0, idx);
   const pass = decoded.slice(idx + 1);
-  return user === adminUser && pass === adminPass;
+  // Tiempo constante: quien intenta adivinar ADMIN_PASSWORD no debe poder
+  // medir cuánto tarda la comparación para inferir cuántos caracteres acertó.
+  return timingSafeEqualStr(user, adminUser) && timingSafeEqualStr(pass, adminPass);
 }
 
 module.exports = {
