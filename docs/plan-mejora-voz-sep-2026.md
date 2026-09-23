@@ -10,20 +10,20 @@ LLM gpt-4o-mini · STT Deepgram nova-3 (es) · TTS ElevenLabs turbo v2.5 · solo
 
 | ID | Sev | Hallazgo | Dónde | Esf |
 |---|---|---|---|---|
-| H1 | ALTA | Error de la API de Cloudbeds se confunde con "sin disponibilidad": el huésped oye que no hay sitio cuando en realidad falló el token o la API, y nadie se entera | `src/cloudbeds.js:148-151`, `src/server.js:144-153` | S |
+| H1 | ALTA | Error de la API de Cloudbeds se confunde con "sin disponibilidad": el huésped oye que no hay sitio cuando en realidad falló el token o la API, y nadie se entera — ✅ V0 (23-sep-2026) | `src/cloudbeds.js:148-151`, `src/server.js:144-153` | S |
 | H2 | ALTA | El parámetro `preference` (privada / compartida / cualquiera) puede no estar en el schema real de la tool en Vapi; el prompt ya lo usa. Si falta, siempre cae en "cualquiera" | `CLAUDE.md:89`, `vapi/system-prompt.md:117-134`, `src/server.js:123` | S |
 | H3 | ALTA | El panel admin recibe `VAPI_API_KEY` y `VAPI_SECRET` en claro y llama a la API de Vapi desde el navegador | `src/server.js:308-315`, `public/index.html:311-360` | M |
 | H4 | ALTA | La `VAPI_API_KEY` compartida por error sigue sin rotar | `CLAUDE.md:88`, `memory.md` | S |
 | H5 | MEDIA | Sin inglés: el prompt fuerza español aunque el que llame sea extranjero | `vapi/system-prompt.md:1-5` | M |
-| H6 | MEDIA | El endpoint que recibe el informe de fin de llamada no valida secreto: cualquiera puede inyectar informes falsos y llenar Telegram de avisos "LLAMAR" | `src/server.js:363-469` | S |
-| H7 | MEDIA | `get-weather` es la única tool sin autenticación | `src/server.js:208` | S |
-| H8 | MEDIA | La autenticación es fail-open: sin `VAPI_SECRET` en el entorno, todo pasa | `src/server.js:30-32,502` | S |
+| H6 | MEDIA | El endpoint que recibe el informe de fin de llamada no valida secreto: cualquiera puede inyectar informes falsos y llenar Telegram de avisos "LLAMAR" — ✅ V0 (23-sep-2026) | `src/server.js:363-469` | S |
+| H7 | MEDIA | `get-weather` es la única tool sin autenticación — ✅ V0 (23-sep-2026) | `src/server.js:208` | S |
+| H8 | MEDIA | La autenticación es fail-open: sin `VAPI_SECRET` en el entorno, todo pasa — ✅ V0 (23-sep-2026) | `src/server.js:30-32,502` | S |
 | H9 | MEDIA | No hay tool para mandar el enlace de reserva por WhatsApp/SMS al terminar una llamada con interés: el huésped tiene que recordar la URL de oído | `vapi/system-prompt.md:19,113-122` | M |
 | H10 | MEDIA | El diccionario de pronunciación se desenganchó por incompatibilidad con turbo v2.5; "Konk" y el dominio quedan sin fijar | `.github/workflows/remove-pronunciation.yml` | M |
 | H11 | MEDIA | `docs/architecture.md`, `docs/operations.md`, `docs/pending-decisions.md` describen el diseño de abril (tools de reserva y códigos ya eliminadas): planificar sobre ellos es planificar sobre algo que no existe | `docs/` | S |
 | H12 | BAJA | No existen `task_tracker.md` ni `work_log.md` | raíz | S |
-| H13 | BAJA | `/health` dice "Cloudbeds autorizado" si existe la variable, no si el refresh token sirve | `src/server.js:351-359` | S |
-| H14 | BAJA | Secretos aceptados por query string en dos rutas: acaban en logs | `src/server.js:82-84,276-277` | S |
+| H13 | BAJA | `/health` dice "Cloudbeds autorizado" si existe la variable, no si el refresh token sirve — ✅ V0 (23-sep-2026) | `src/server.js:351-359` | S |
+| H14 | BAJA | Secretos aceptados por query string en dos rutas: acaban en logs — ✅ V0 (23-sep-2026) | `src/server.js:82-84,276-277` | S |
 | H15 | BAJA | Sin métrica de conversión (llamadas → reservas); el informe de coste de Vapi es manual | `.github/workflows/vapi-cost-report.yml` | M |
 
 ## Tandas propuestas (orden recomendado)
@@ -67,4 +67,5 @@ LLM gpt-4o-mini · STT Deepgram nova-3 (es) · TTS ElevenLabs turbo v2.5 · solo
 
 ## Estado
 - **23-sep-2026: plan aprobado por Luis** (orden V0 → V4). Rotación de key: la hace Luis. Inglés: aprobado con el criterio de arriba.
-- V0 en construcción en la rama `v0-seguridad-robustez` (sin push a main hasta revisar y confirmar `VAPI_SECRET` en EasyPanel).
+- **V0 DESPLEGADA el 23-sep-2026 a las 20:29** (merge `e5778e0` en main). Verificado en producción: `/health` devuelve `status ok`, `cloudbeds ok` (comprobación real con caché de 5 min), `vapiSecretConfigured true`, `telegram configured`. `npm test`: 8 archivos, todos en verde.
+- Condición del auditor (secreto de `get_weather`): Luis confirmó en el dashboard que el tool tiene URL pero no secreto, y el assistant tampoco tiene `server.secret`. Por eso `get_weather` y el informe de fin de llamada van en modo **warn** (`VAPI_LEGACY_AUTH`, alias `VAPI_END_OF_CALL_AUTH`). Pendiente de Luis: pegar el valor de `VAPI_SECRET` en Vapi → Tools/get_weather/Server/Secret y en Assistant/Server/Secret; después pasar a `strict`. Cada push a main redespliega el bot: agrupar cambios de docs con la siguiente tanda de código.

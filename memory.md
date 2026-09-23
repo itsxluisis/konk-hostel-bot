@@ -53,3 +53,11 @@ A React-based single-HTML-file admin panel was built, connecting to Vapi via API
 | Telegram | Staff incident alerts |
 | Booking.com | Current channel for new reservations |
 | Rentalme.es | Luis's operating company |
+
+## 23-sep-2026 — Tanda V0 desplegada
+
+- **Cambios integrados:** H1 error de API ≠ sin disponibilidad (bot dice "te lo confirmo en un momento por WhatsApp" + aviso Telegram ALERTAS); H6/H7 auth en modo warn para end-of-call-report y get_weather vía `VAPI_LEGACY_AUTH`; H8 vapiAuth fail-closed con aviso de arranque con cooldown 6 h; H13 `/health` comprueba Cloudbeds de verdad (refresh token); H14 sin secretos por query string (solo headers).
+- **Plan completo:** `docs/plan-mejora-voz-sep-2026.md`. Tandas V1–V4 pendientes (panel sin secretos, conversión, idioma, docs).
+- **Trampa nueva:** `get_weather` se creó a mano en el dashboard sin secreto; los JSON en `vapi/tools/` son documentación, `sync-vapi.yml` solo sincroniza el prompt.
+- **Pendiente de Luis:** pegar el valor de `VAPI_SECRET` en Vapi en dos sitios (Tools/get_weather/Server/Secret y Assistant/Server/Secret); después rotar `VAPI_API_KEY`.
+- **Regla operativa:** cada push a main redespliega el bot; no pushear solo docs.
