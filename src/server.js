@@ -8,6 +8,9 @@ const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi }
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
 const vigilante = require('./vigilante');
+const { matchesConfiguredSecret } = require('./secret-auth');
+const adminSession = require('./admin-session');
+const vapiProxy = require('./vapi-proxy');
 
 const path = require('path');
 const fs = require('fs');
@@ -17,7 +20,7 @@ app.use(express.json());
 // ─── CORS ────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-vapi-secret, x-admin-token');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
@@ -31,6 +34,16 @@ app.use('/admin-panel', express.static(path.join(__dirname, '../public')));
 // Fail-closed (H8): sin VAPI_SECRET configurado, las rutas protegidas
 // devuelven 503 (no dejan pasar sin auth). El proceso sigue arrancado igual;
 // solo estos endpoints quedan bloqueados hasta que se configure el secreto.
+//
+// Rotación (V1): si VAPI_SECRET_PREVIOUS está definida, también se acepta
+// (ver src/secret-auth.js) — así se puede cambiar VAPI_SECRET en EasyPanel
+// sin cortar el bot mientras Vapi todavía manda el secreto viejo.
+//
+// Admin panel (H3 — panel sin secretos): el navegador ya no conoce
+// VAPI_SECRET. La pestaña "Test dispon." llama a este mismo tool
+// (/vapi/get-availability) para previsualizar la respuesta del bot, así que
+// una sesión de panel válida (o Basic con ADMIN_USER/ADMIN_PASSWORD) también
+// autentica aquí. Las llamadas reales de Vapi siguen usando el secreto.
 function vapiAuth(req, res, next) {
   const secret = process.env.VAPI_SECRET;
   if (!secret) {
@@ -38,16 +51,17 @@ function vapiAuth(req, res, next) {
     return res.status(503).json({ error: 'Servidor sin autenticación configurada (falta VAPI_SECRET)' });
   }
 
-  const auth = req.headers['x-vapi-secret'] || req.headers['authorization'];
-
-  // Log para diagnosticar problemas de auth
-  console.log(`[Auth] ${req.path} | x-vapi-secret: ${req.headers['x-vapi-secret']?.slice(0,8)}... | auth: ${auth?.slice(0,8)}...`);
-
-  if (!auth || auth.replace('Bearer ', '') !== secret) {
-    console.warn('[Auth] RECHAZADO desde:', req.ip, '| headers:', JSON.stringify(Object.keys(req.headers)));
-    return res.status(401).json({ error: 'Unauthorized' });
+  const provided = req.headers['x-vapi-secret'] || req.headers['authorization'];
+  if (matchesConfiguredSecret(provided, secret, process.env.VAPI_SECRET_PREVIOUS)) {
+    return next();
   }
-  next();
+  if (isAdminAuthenticated(req)) {
+    console.log(`[Auth] ${req.path} autenticado por sesión de panel admin`);
+    return next();
+  }
+
+  console.warn('[Auth] RECHAZADO desde:', req.ip, '| path:', req.path);
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 // ─── Auth en modo warn/strict para tools "legacy" sin server.secret confirmado
@@ -64,8 +78,25 @@ const VAPI_LEGACY_AUTH_MODE = (
 function legacyAuthOk(req) {
   const secret = process.env.VAPI_SECRET;
   if (!secret) return false;
-  const auth = req.headers['x-vapi-secret'] || req.headers['authorization'];
-  return !!auth && auth.replace('Bearer ', '') === secret;
+  const provided = req.headers['x-vapi-secret'] || req.headers['authorization'];
+  return matchesConfiguredSecret(provided, secret, process.env.VAPI_SECRET_PREVIOUS);
+}
+
+// ─── Middleware: panel admin (H3 — panel sin secretos) ────────────────────────
+// El navegador nunca recibe VAPI_API_KEY ni VAPI_SECRET. Se autentica con:
+//  a) el token de sesión que devuelve /admin/login (cabecera x-admin-token), o
+//  b) HTTP Basic con ADMIN_USER/ADMIN_PASSWORD (para curl/diagnóstico manual).
+// Nunca se aceptan credenciales por query string (solo cabeceras).
+function isAdminAuthenticated(req) {
+  if (adminSession.isValidSession(req.headers['x-admin-token'])) return true;
+  const adminUser = process.env.ADMIN_USER || 'admin';
+  return adminSession.checkBasicAuth(req.headers['authorization'], adminUser, process.env.ADMIN_PASSWORD);
+}
+
+function adminAuth(req, res, next) {
+  if (isAdminAuthenticated(req)) return next();
+  console.warn('[AdminAuth] RECHAZADO desde:', req.ip, '| path:', req.path);
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -403,8 +434,10 @@ app.post('/vapi/get-current-date', vapiAuth, (req, res) => {
 });
 // ─── DIAGNÓSTICO: ver estructura de room types en Cloudbeds ──────────────────
 // H14: antes aceptaba el secreto también por ?token= (query string); ahora
-// solo por cabecera, vía el mismo vapiAuth que el resto de rutas protegidas.
-app.get('/admin/room-types', vapiAuth, async (req, res) => {
+// solo por cabecera. H3 (V1): esta y el resto de rutas /admin/* de diagnóstico
+// ya no aceptan VAPI_SECRET desde el navegador — usan adminAuth (sesión del
+// panel o Basic ADMIN_USER/ADMIN_PASSWORD), nunca query string.
+app.get('/admin/room-types', adminAuth, async (req, res) => {
   try {
     const axios = require('axios');
     const accessToken = await getToken();
@@ -419,7 +452,7 @@ app.get('/admin/room-types', vapiAuth, async (req, res) => {
 });
 
 // ─── DIAGNÓSTICO: precios crudos de Cloudbeds para un rango ──────────────────
-app.get('/admin/availability-debug', vapiAuth, async (req, res) => {
+app.get('/admin/availability-debug', adminAuth, async (req, res) => {
   const { checkin, checkout } = req.query;
   if (!checkin || !checkout) return res.status(400).json({ error: 'Faltan checkin/checkout' });
   try {
@@ -432,18 +465,107 @@ app.get('/admin/availability-debug', vapiAuth, async (req, res) => {
   }
 });
 
+// ─── ADMIN: rate-limit sencillo para /admin/login ────────────────────────────
+// Sin dependencias nuevas: contador en memoria por IP, 10 intentos / 15 min.
+// Se cuenta cada intento (acierte o no), como cualquier limitador de fuerza
+// bruta. En memoria: se resetea en cada redeploy, igual que las sesiones.
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_RATE_LIMIT_MAX = 10;
+const loginAttemptsByIp = new Map(); // ip -> { count, windowStart }
+
+function loginRateLimited(ip) {
+  const now = Date.now();
+  const entry = loginAttemptsByIp.get(ip);
+  if (!entry || now - entry.windowStart > LOGIN_RATE_LIMIT_WINDOW_MS) {
+    loginAttemptsByIp.set(ip, { count: 1, windowStart: now });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > LOGIN_RATE_LIMIT_MAX;
+}
+
 // ─── ADMIN: login ─────────────────────────────────────────────────────────────
+// H3 (V1): ya NO devuelve VAPI_API_KEY ni VAPI_SECRET — el navegador no debe
+// conocer ninguno de los dos. Devuelve un token de sesión opaco (ver
+// src/admin-session.js) que el panel manda en la cabecera x-admin-token para
+// el resto de rutas /admin/* y para las tools de Vapi que la pestaña "Test
+// dispon." dispara desde el navegador.
 app.post('/admin/login', (req, res) => {
+  if (loginRateLimited(req.ip)) {
+    console.warn('[AdminLogin] Rate-limit excedido desde', req.ip);
+    return res.status(429).json({ ok: false, error: 'Demasiados intentos. Prueba de nuevo en unos minutos.' });
+  }
   const { user, pass } = req.body || {};
   const adminUser = process.env.ADMIN_USER || 'admin';
   const adminPass = process.env.ADMIN_PASSWORD;
   if (!adminPass) return res.status(500).json({ ok: false, error: 'ADMIN_PASSWORD not set' });
   if (user !== adminUser || pass !== adminPass) return res.status(401).json({ ok: false });
-  res.json({ ok: true, vapiKey: process.env.VAPI_API_KEY || '', webhookSecret: process.env.VAPI_SECRET || '' });
+  const token = adminSession.createSession();
+  res.json({ ok: true, token });
+});
+
+// ─── ADMIN: logout ────────────────────────────────────────────────────────────
+app.post('/admin/logout', adminAuth, (req, res) => {
+  adminSession.invalidateSession(req.headers['x-admin-token']);
+  res.json({ ok: true });
+});
+
+// ─── ADMIN: proxy a la API de Vapi (H3 — panel sin secretos) ─────────────────
+// La VAPI_API_KEY solo vive en el servidor (src/vapi-proxy.js). Allow-list
+// explícita: exactamente las 4 llamadas que hace public/index.html hoy
+// (historial de llamadas, detalle de llamada, asistente, guardar prompt).
+function vapiLimit(raw, fallback, max) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(n, max);
+}
+
+app.get('/admin/vapi/calls', adminAuth, async (req, res) => {
+  try {
+    const data = await vapiProxy.call('listCalls', { query: { limit: vapiLimit(req.query.limit, 50, 200) } });
+    res.json(data);
+  } catch (err) {
+    console.error('[admin/vapi/calls]', err.message);
+    res.status(502).json({ error: 'Error consultando Vapi' });
+  }
+});
+
+app.get('/admin/vapi/calls/:id', adminAuth, async (req, res) => {
+  try {
+    const data = await vapiProxy.call('getCall', { params: { id: req.params.id } });
+    res.json(data);
+  } catch (err) {
+    console.error('[admin/vapi/calls/:id]', err.message);
+    res.status(502).json({ error: 'Error consultando Vapi' });
+  }
+});
+
+app.get('/admin/vapi/assistants', adminAuth, async (req, res) => {
+  try {
+    const data = await vapiProxy.call('listAssistants', { query: { limit: vapiLimit(req.query.limit, 10, 50) } });
+    res.json(data);
+  } catch (err) {
+    console.error('[admin/vapi/assistants]', err.message);
+    res.status(502).json({ error: 'Error consultando Vapi' });
+  }
+});
+
+app.patch('/admin/vapi/assistants/:id', adminAuth, async (req, res) => {
+  try {
+    const { name, firstMessage, model } = req.body || {};
+    const data = await vapiProxy.call('patchAssistant', {
+      params: { id: req.params.id },
+      body: { name, firstMessage, model },
+    });
+    res.json(data);
+  } catch (err) {
+    console.error('[admin/vapi/assistants/:id PATCH]', err.message);
+    res.status(502).json({ error: 'Error actualizando Vapi' });
+  }
 });
 
 // ─── ADMIN: reservas hoy y mañana ─────────────────────────────────────────────
-app.get('/admin/reservations-today', vapiAuth, async (req, res) => {
+app.get('/admin/reservations-today', adminAuth, async (req, res) => {
   try {
     // Fecha en hora de Madrid (en-CA da formato YYYY-MM-DD); UTC mostraría
     // el día anterior entre las 00:00 y la 01:00/02:00 hora española.
@@ -463,7 +585,7 @@ app.get('/admin/reservations-today', vapiAuth, async (req, res) => {
 
 // ─── VIGILANTE DE COBROS ──────────────────────────────────────────────────────
 // Revisión manual. Sin ?enviar=1 solo devuelve lo que vería, no manda Telegram.
-app.get('/admin/vigilante', vapiAuth, async (req, res) => {
+app.get('/admin/vigilante', adminAuth, async (req, res) => {
   try {
     const r = await vigilante.ejecutar({
       enviar: req.query.enviar === '1',
@@ -524,6 +646,12 @@ app.get('/health', async (req, res) => {
     vigilante: vigilante.info(),
     // H8: visibilidad de si las rutas protegidas están realmente protegidas.
     vapiSecretConfigured: !!process.env.VAPI_SECRET,
+    // V1: booleanos, nunca valores. true mientras dure una rotación de
+    // VAPI_SECRET (hay que retirar VAPI_SECRET_PREVIOUS cuando termine).
+    vapiSecretPreviousActive: !!process.env.VAPI_SECRET_PREVIOUS,
+    // true si el Encargado tiene su propio secreto (ENCARGADO_SECRET) en vez
+    // de reusar VAPI_SECRET como fallback de compatibilidad.
+    encargadoSecretDedicated: !!process.env.ENCARGADO_SECRET,
   });
 });
 
@@ -710,6 +838,24 @@ OAuth:
       ).catch(e => console.error('[arranque] Error avisando falta de VAPI_SECRET:', e.message));
     } else {
       console.warn('[arranque] Aviso a Telegram omitido (cooldown 6h, ya se avisó recientemente)');
+    }
+  }
+
+  // V1: rotación de VAPI_SECRET en curso. Mientras VAPI_SECRET_PREVIOUS esté
+  // definida, vapiAuth/legacyAuthOk aceptan también el secreto viejo — hace
+  // falta para poder cambiar VAPI_SECRET sin cortar el bot mientras Vapi
+  // sigue usando el anterior. Un solo aviso por cooldown de 6h, igual que el
+  // resto de avisos de arranque (evita spam en crash-loop).
+  if (process.env.VAPI_SECRET_PREVIOUS) {
+    console.warn('[Arranque] VAPI_SECRET_PREVIOUS definida — aceptando también el secreto anterior (rotación en curso).');
+    if (debeAvisarConCooldown(path.join(DATA_DIR, '.alerta-vapi-secret-previous'), ALERTA_ARRANQUE_COOLDOWN_MS)) {
+      sendTelegram(
+        '🔄 Konk Bot: rotación de VAPI_SECRET en curso (VAPI_SECRET_PREVIOUS definida). '
+        + 'Retirar VAPI_SECRET_PREVIOUS cuando Vapi ya use el nuevo secreto.',
+        { threadId: require('./encargado').hilo('ALERTAS') }
+      ).catch(e => console.error('[arranque] Error avisando rotación en curso:', e.message));
+    } else {
+      console.warn('[arranque] Aviso de rotación omitido (cooldown 6h, ya se avisó recientemente)');
     }
   }
 
