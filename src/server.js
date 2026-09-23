@@ -50,6 +50,24 @@ function vapiAuth(req, res, next) {
   next();
 }
 
+// ─── Auth en modo warn/strict para tools "legacy" sin server.secret confirmado
+// Comprobado en vivo (diag-server-messages.yml, 23-sep-2026): no está
+// confirmado que Vapi mande x-vapi-secret ni con el end-of-call-report ni con
+// get_weather. En 'warn' (por defecto) se deja pasar sin secreto válido, se
+// loguea y se manda UN aviso a Telegram por proceso; en 'strict' se rechaza
+// con 401. VAPI_END_OF_CALL_AUTH se conserva como alias de compatibilidad
+// (ya documentado en .env.example) si VAPI_LEGACY_AUTH no está definida.
+const VAPI_LEGACY_AUTH_MODE = (
+  process.env.VAPI_LEGACY_AUTH || process.env.VAPI_END_OF_CALL_AUTH || 'warn'
+).toLowerCase();
+
+function legacyAuthOk(req) {
+  const secret = process.env.VAPI_SECRET;
+  if (!secret) return false;
+  const auth = req.headers['x-vapi-secret'] || req.headers['authorization'];
+  return !!auth && auth.replace('Bearer ', '') === secret;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // Extraer toolCallId del request de Vapi
@@ -69,10 +87,11 @@ function getToolArgs(req) {
 }
 
 // Formato de respuesta correcto para Vapi
-function vapiReply(req, res, result) {
+function vapiReply(req, res, result, status = 200) {
   const toolCallId = getToolCallId(req);
   console.log(`[Vapi] toolCallId: ${toolCallId}`);
 
+  res.status(status);
   if (toolCallId) {
     return res.json({
       results: [{ toolCallId, result }],
@@ -297,7 +316,26 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
 
 // ─── VAPI TOOL: get_weather ──────────────────────────────────────────────────
 // La Manga del Mar Menor: 37.64°N, -0.73°E
-app.post('/vapi/get-weather', vapiAuth, async (req, res) => {
+// Auth en modo warn/strict (VAPI_LEGACY_AUTH, ver arriba): no está confirmado
+// que este tool mande x-vapi-secret desde el assistant de Vapi, así que no
+// puede ir en auth estricta (vapiAuth) todavía.
+let warnedMissingWeatherSecret = false;
+app.post('/vapi/get-weather', async (req, res) => {
+  if (!legacyAuthOk(req)) {
+    if (VAPI_LEGACY_AUTH_MODE === 'strict') {
+      console.warn('[get-weather] RECHAZADO: sin secreto válido (modo strict)');
+      return vapiReply(req, res, 'No puedo consultar el tiempo ahora mismo', 401);
+    }
+    console.warn('[get-weather] Llamada SIN secreto válido — dejando pasar (modo warn)');
+    if (!warnedMissingWeatherSecret) {
+      warnedMissingWeatherSecret = true;
+      sendTelegram(
+        '⚠️ Konk Bot: get_weather sin secreto válido (x-vapi-secret). '
+        + 'Configurar server.secret en el assistant de Vapi y pasar VAPI_LEGACY_AUTH a strict.',
+        { threadId: require('./encargado').hilo('ALERTAS') }
+      ).catch(e => console.error('[get-weather] Error avisando falta de secreto:', e.message));
+    }
+  }
   const axios = require('axios');
   const WMO = (c) => {
     if (c === 0) return 'cielo despejado';
@@ -497,15 +535,9 @@ app.get('/health', async (req, res) => {
 // aviso a Telegram) y no 'strict' (que cortaría el resumen de cada llamada
 // hasta que alguien active server.secret en el assistant, fuera del alcance
 // de esta tanda — es un cambio de Vapi, no de este servidor).
-const VAPI_END_OF_CALL_AUTH_MODE = (process.env.VAPI_END_OF_CALL_AUTH || 'warn').toLowerCase();
+// Modo y helper compartidos con get_weather: ver VAPI_LEGACY_AUTH_MODE y
+// legacyAuthOk() cerca de vapiAuth, arriba.
 let warnedMissingEndOfCallSecret = false;
-
-function endOfCallAuthOk(req) {
-  const secret = process.env.VAPI_SECRET;
-  if (!secret) return false;
-  const auth = req.headers['x-vapi-secret'] || req.headers['authorization'];
-  return !!auth && auth.replace('Bearer ', '') === secret;
-}
 
 // ─── VAPI: inyectar fecha actual al inicio de cada llamada ────────────────────
 app.get('/vapi/assistant-config', (req, res) => res.json({ ok: true }));
@@ -515,8 +547,8 @@ app.post('/vapi/assistant-config', (req, res) => {
 
   // Resumen post-llamada a Telegram
   if (eventType === 'end-of-call-report') {
-    if (!endOfCallAuthOk(req)) {
-      if (VAPI_END_OF_CALL_AUTH_MODE === 'strict') {
+    if (!legacyAuthOk(req)) {
+      if (VAPI_LEGACY_AUTH_MODE === 'strict') {
         console.warn('[end-of-call] RECHAZADO: informe sin secreto válido (modo strict)');
         return res.status(401).json({ error: 'Unauthorized' });
       }
