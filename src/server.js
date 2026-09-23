@@ -8,13 +8,21 @@ const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi }
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
 const vigilante = require('./vigilante');
-const { matchesConfiguredSecret } = require('./secret-auth');
+const { matchesConfiguredSecret, timingSafeEqualStr } = require('./secret-auth');
 const adminSession = require('./admin-session');
 const vapiProxy = require('./vapi-proxy');
 
 const path = require('path');
 const fs = require('fs');
 const app = express();
+
+// EasyPanel pone Traefik delante: sin esto, req.ip es SIEMPRE la IP del
+// proxy interno para todas las peticiones, no la del cliente real — rompe
+// el rate-limit por IP de /admin/login (cualquiera bloquearía a todo el
+// mundo) y los logs de auth rechazada. `1` = confiar en el primer proxy de
+// la cadena (el propio Traefik), nada más allá.
+app.set('trust proxy', 1);
+
 app.use(express.json());
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
@@ -29,6 +37,37 @@ app.use((req, res, next) => {
 // ─── Panel admin ──────────────────────────────────────────────────────────────
 // Protegido con token en query string o cookie
 app.use('/admin-panel', express.static(path.join(__dirname, '../public')));
+
+// ─── Límite de fuerza bruta compartido (login + Basic auth) ──────────────────
+// Sin dependencias nuevas: contador en memoria por IP, 10 intentos FALLIDOS
+// / 15 min. Cubre POST /admin/login Y cualquier intento de HTTP Basic con
+// ADMIN_USER/ADMIN_PASSWORD equivocados en CUALQUIER ruta protegida por
+// adminAuth/vapiAuth — si solo protegiéramos /admin/login, se podría probar
+// la contraseña sin límite contra, p. ej., GET /admin/vigilante. Una sesión
+// de panel válida (x-admin-token) nunca cuenta ni se ve afectada por un
+// bloqueo: es un token de alta entropía, adivinarlo no es viable por fuerza
+// bruta. En memoria: se resetea en cada redeploy, igual que las sesiones.
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_RATE_LIMIT_MAX = 10;
+const loginAttemptsByIp = new Map(); // ip -> { count, windowStart }
+
+function isIpBlocked(ip) {
+  const entry = loginAttemptsByIp.get(ip);
+  if (!entry) return false;
+  if (Date.now() - entry.windowStart > LOGIN_RATE_LIMIT_WINDOW_MS) return false;
+  return entry.count > LOGIN_RATE_LIMIT_MAX;
+}
+
+/** Cuenta un intento fallido (login o Basic auth) para esta IP. */
+function registerFailedAttempt(ip) {
+  const now = Date.now();
+  const entry = loginAttemptsByIp.get(ip);
+  if (!entry || now - entry.windowStart > LOGIN_RATE_LIMIT_WINDOW_MS) {
+    loginAttemptsByIp.set(ip, { count: 1, windowStart: now });
+    return;
+  }
+  entry.count += 1;
+}
 
 // ─── Middleware: verificar que la llamada viene de Vapi ───────────────────────
 // Fail-closed (H8): sin VAPI_SECRET configurado, las rutas protegidas
@@ -87,10 +126,22 @@ function legacyAuthOk(req) {
 //  a) el token de sesión que devuelve /admin/login (cabecera x-admin-token), o
 //  b) HTTP Basic con ADMIN_USER/ADMIN_PASSWORD (para curl/diagnóstico manual).
 // Nunca se aceptan credenciales por query string (solo cabeceras).
+//
+// Basic auth comparte el limitador de fuerza bruta con /admin/login (ver
+// arriba): si la IP ya está bloqueada, se rechaza sin comprobar
+// credenciales; si falla, cuenta como intento — así no se puede probar
+// ADMIN_PASSWORD sin límite contra cualquier ruta /admin/* o /vapi/*.
 function isAdminAuthenticated(req) {
   if (adminSession.isValidSession(req.headers['x-admin-token'])) return true;
+
+  const authz = req.headers['authorization'];
+  if (typeof authz !== 'string' || !authz.startsWith('Basic ')) return false;
+  if (isIpBlocked(req.ip)) return false;
+
   const adminUser = process.env.ADMIN_USER || 'admin';
-  return adminSession.checkBasicAuth(req.headers['authorization'], adminUser, process.env.ADMIN_PASSWORD);
+  const ok = adminSession.checkBasicAuth(authz, adminUser, process.env.ADMIN_PASSWORD);
+  if (!ok) registerFailedAttempt(req.ip);
+  return ok;
 }
 
 function adminAuth(req, res, next) {
@@ -465,33 +516,16 @@ app.get('/admin/availability-debug', adminAuth, async (req, res) => {
   }
 });
 
-// ─── ADMIN: rate-limit sencillo para /admin/login ────────────────────────────
-// Sin dependencias nuevas: contador en memoria por IP, 10 intentos / 15 min.
-// Se cuenta cada intento (acierte o no), como cualquier limitador de fuerza
-// bruta. En memoria: se resetea en cada redeploy, igual que las sesiones.
-const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_RATE_LIMIT_MAX = 10;
-const loginAttemptsByIp = new Map(); // ip -> { count, windowStart }
-
-function loginRateLimited(ip) {
-  const now = Date.now();
-  const entry = loginAttemptsByIp.get(ip);
-  if (!entry || now - entry.windowStart > LOGIN_RATE_LIMIT_WINDOW_MS) {
-    loginAttemptsByIp.set(ip, { count: 1, windowStart: now });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > LOGIN_RATE_LIMIT_MAX;
-}
-
 // ─── ADMIN: login ─────────────────────────────────────────────────────────────
 // H3 (V1): ya NO devuelve VAPI_API_KEY ni VAPI_SECRET — el navegador no debe
 // conocer ninguno de los dos. Devuelve un token de sesión opaco (ver
 // src/admin-session.js) que el panel manda en la cabecera x-admin-token para
 // el resto de rutas /admin/* y para las tools de Vapi que la pestaña "Test
 // dispon." dispara desde el navegador.
+// Rate-limit: mismo limitador compartido que la auth Basic (ver arriba). Solo
+// cuentan los intentos FALLIDOS — un login correcto nunca gasta el cupo.
 app.post('/admin/login', (req, res) => {
-  if (loginRateLimited(req.ip)) {
+  if (isIpBlocked(req.ip)) {
     console.warn('[AdminLogin] Rate-limit excedido desde', req.ip);
     return res.status(429).json({ ok: false, error: 'Demasiados intentos. Prueba de nuevo en unos minutos.' });
   }
@@ -499,7 +533,12 @@ app.post('/admin/login', (req, res) => {
   const adminUser = process.env.ADMIN_USER || 'admin';
   const adminPass = process.env.ADMIN_PASSWORD;
   if (!adminPass) return res.status(500).json({ ok: false, error: 'ADMIN_PASSWORD not set' });
-  if (user !== adminUser || pass !== adminPass) return res.status(401).json({ ok: false });
+  const ok = typeof user === 'string' && typeof pass === 'string'
+    && timingSafeEqualStr(user, adminUser) && timingSafeEqualStr(pass, adminPass);
+  if (!ok) {
+    registerFailedAttempt(req.ip);
+    return res.status(401).json({ ok: false });
+  }
   const token = adminSession.createSession();
   res.json({ ok: true, token });
 });
