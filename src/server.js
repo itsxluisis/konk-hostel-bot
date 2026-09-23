@@ -4,7 +4,7 @@
 require('dotenv').config();
 
 const express = require('express');
-const { exchangeCode, getAvailability, getAuthUrl, getToken } = require('./cloudbeds');
+const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
 const vigilante = require('./vigilante');
@@ -27,12 +27,18 @@ app.use((req, res, next) => {
 app.use('/admin-panel', express.static(path.join(__dirname, '../public')));
 
 // ─── Middleware: verificar que la llamada viene de Vapi ───────────────────────
+// Fail-closed (H8): sin VAPI_SECRET configurado, las rutas protegidas
+// devuelven 503 (no dejan pasar sin auth). El proceso sigue arrancado igual;
+// solo estos endpoints quedan bloqueados hasta que se configure el secreto.
 function vapiAuth(req, res, next) {
   const secret = process.env.VAPI_SECRET;
-  if (!secret) return next();
+  if (!secret) {
+    console.error(`[Auth] VAPI_SECRET no configurado — ${req.path} responde 503`);
+    return res.status(503).json({ error: 'Servidor sin autenticación configurada (falta VAPI_SECRET)' });
+  }
 
   const auth = req.headers['x-vapi-secret'] || req.headers['authorization'];
-  
+
   // Log para diagnosticar problemas de auth
   console.log(`[Auth] ${req.path} | x-vapi-secret: ${req.headers['x-vapi-secret']?.slice(0,8)}... | auth: ${auth?.slice(0,8)}...`);
 
@@ -76,13 +82,14 @@ function vapiReply(req, res, result) {
 
 // ─── OAUTH: flujo autorización inicial ───────────────────────────────────────
 
-// Paso 1: redirigir a Cloudbeds para autorizar
-app.get('/auth/cloudbeds', (req, res) => {
-  // Proteger esta ruta con un token admin simple
-  if (req.query.token !== process.env.VAPI_SECRET) {
-    return res.status(401).send('No autorizado');
-  }
-  res.redirect(getAuthUrl());
+// Paso 1: obtener la URL de autorización de Cloudbeds.
+// H14: el secreto va SOLO por cabecera (x-vapi-secret / Authorization), nunca
+// por query string — un token en la URL acaba en logs de acceso e historial
+// del navegador. Como un GET de navegador no puede mandar cabeceras propias,
+// esta ruta ya no redirige directamente: devuelve la URL en JSON para
+// pegarla en el navegador (curl -H "x-vapi-secret: $VAPI_SECRET" .../auth/cloudbeds).
+app.get('/auth/cloudbeds', vapiAuth, (req, res) => {
+  res.json({ url: getAuthUrl() });
 });
 
 // Paso 2: Cloudbeds redirige aquí con el código
@@ -113,6 +120,57 @@ app.get('/auth/cloudbeds/callback', async (req, res) => {
   }
 });
 
+
+// ─── H1: alerta a Telegram si Cloudbeds falla al consultar disponibilidad ────
+// Rate-limit de 1 aviso cada 10 minutos para no inundar el tema ALERTAS si
+// Cloudbeds está caído un buen rato.
+let lastCloudbedsAlertAt = 0;
+const CLOUDBEDS_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+
+function extractVapiCallInfo(req) {
+  const phone =
+    req.body?.message?.customer?.number
+    || req.body?.message?.call?.customer?.number
+    || req.body?.customer?.number
+    || null;
+  const callId =
+    req.body?.message?.call?.id
+    || req.body?.call?.id
+    || req.body?.message?.toolCallList?.[0]?.id
+    || null;
+  return { phone, callId };
+}
+
+async function alertCloudbedsFailure(req, err) {
+  const now = Date.now();
+  if (now - lastCloudbedsAlertAt < CLOUDBEDS_ALERT_COOLDOWN_MS) {
+    console.warn('[get-availability] Alerta a Telegram omitida (rate-limit 10 min)');
+    return;
+  }
+  lastCloudbedsAlertAt = now;
+
+  const kind = err?.kind || 'unknown';
+  const shortMsg = (err?.message || 'error desconocido').slice(0, 200);
+  const hora = new Date().toLocaleString('es-ES', {
+    timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  const { phone, callId } = extractVapiCallInfo(req);
+
+  const lines = [
+    '⚠️ Konk Bot — Cloudbeds falló consultando disponibilidad',
+    `Tipo: ${kind}`,
+    `Error: ${shortMsg}`,
+    `Hora: ${hora}`,
+  ];
+  if (phone) lines.push(`Tel: ${phone}`);
+  if (callId) lines.push(`Llamada: ${callId}`);
+
+  try {
+    await sendTelegram(lines.join('\n'), { threadId: require('./encargado').hilo('ALERTAS') });
+  } catch (e) {
+    console.error('[get-availability] Error enviando alerta a Telegram:', e.message);
+  }
+}
 
 // ─── VAPI TOOL: get_availability ─────────────────────────────────────────────
 app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
@@ -148,8 +206,11 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     console.log(`[get-availability] reply: ${reply}`);
     return vapiReply(req, res, reply);
   } catch (err) {
-    console.error('[get-availability] Error:', err.message);
-    return vapiReply(req, res, `No he podido consultar disponibilidad en este momento. Puedes entrar en haz tu reserva punto a pe pe para ver opciones.`);
+    console.error(`[get-availability] Error (kind=${err?.kind || 'unknown'}):`, err.message);
+    // Fire-and-forget: no bloquear la respuesta al bot por el aviso a Telegram
+    // (la tool tiene 8s de margen en Vapi).
+    alertCloudbedsFailure(req, err).catch(e => console.error('[get-availability] alerta falló:', e.message));
+    return vapiReply(req, res, 'Ahora mismo no puedo consultar la disponibilidad por un problema técnico. Puedes reservar directamente en haz tu reserva punto app, o llamar más tarde. Ya he avisado al equipo.');
   }
 });
 
@@ -205,7 +266,7 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
 
 // ─── VAPI TOOL: get_weather ──────────────────────────────────────────────────
 // La Manga del Mar Menor: 37.64°N, -0.73°E
-app.post('/vapi/get-weather', async (req, res) => {
+app.post('/vapi/get-weather', vapiAuth, async (req, res) => {
   const axios = require('axios');
   const WMO = (c) => {
     if (c === 0) return 'cielo despejado';
@@ -272,11 +333,9 @@ app.post('/vapi/get-current-date', vapiAuth, (req, res) => {
   );
 });
 // ─── DIAGNÓSTICO: ver estructura de room types en Cloudbeds ──────────────────
-app.get('/admin/room-types', async (req, res) => {
-  const token = req.headers['x-vapi-secret'] || req.query.token;
-  if (process.env.VAPI_SECRET && token !== process.env.VAPI_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+// H14: antes aceptaba el secreto también por ?token= (query string); ahora
+// solo por cabecera, vía el mismo vapiAuth que el resto de rutas protegidas.
+app.get('/admin/room-types', vapiAuth, async (req, res) => {
   try {
     const axios = require('axios');
     const accessToken = await getToken();
@@ -348,15 +407,74 @@ app.get('/admin/vigilante', vapiAuth, async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => {
+// ─── H13: /health comprueba Cloudbeds de verdad ──────────────────────────────
+// Antes: 'authorized' solo miraba si CLOUDBEDS_REFRESH_TOKEN existía como
+// variable, no si el token sirve de verdad. Ahora hace una llamada barata
+// autenticada (getRoomTypes) con caché de 5 minutos (el panel admin sondea
+// /health cada 30s; sin caché golpearíamos Cloudbeds sin necesidad).
+const CLOUDBEDS_HEALTH_TTL_MS = 5 * 60 * 1000;
+let cloudbedsHealthCache = { status: 'error', checkedAt: null };
+let cloudbedsHealthPromise = null;
+
+async function checkCloudbedsHealth() {
+  const now = Date.now();
+  if (cloudbedsHealthCache.checkedAt && (now - cloudbedsHealthCache.checkedAt) < CLOUDBEDS_HEALTH_TTL_MS) {
+    return cloudbedsHealthCache;
+  }
+  if (cloudbedsHealthPromise) return cloudbedsHealthPromise;
+
+  cloudbedsHealthPromise = (async () => {
+    let status = 'error';
+    try {
+      const data = await cloudbedsApi('GET', '/getRoomTypes', {});
+      status = (data && data.success === false) ? 'error' : 'ok';
+    } catch (err) {
+      console.error('[health] Chequeo de Cloudbeds falló:', err.message);
+      status = 'error';
+    }
+    cloudbedsHealthCache = { status, checkedAt: Date.now() };
+    return cloudbedsHealthCache;
+  })();
+
+  try {
+    return await cloudbedsHealthPromise;
+  } finally {
+    cloudbedsHealthPromise = null;
+  }
+}
+
+app.get('/health', async (req, res) => {
+  const cb = await checkCloudbedsHealth();
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    cloudbeds: !!process.env.CLOUDBEDS_REFRESH_TOKEN ? 'authorized' : 'pending_auth',
+    // 'ok' | 'error' — comprobación real (getRoomTypes), no solo si existe la variable.
+    cloudbeds: cb.status,
+    cloudbedsCheckedAt: cb.checkedAt ? new Date(cb.checkedAt).toISOString() : null,
     telegram: !!process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'missing',
     vigilante: vigilante.info(),
+    // H8: visibilidad de si las rutas protegidas están realmente protegidas.
+    vapiSecretConfigured: !!process.env.VAPI_SECRET,
   });
 });
+
+// ─── H6: autenticar el informe de fin de llamada ─────────────────────────────
+// Comprobado en vivo (diag-server-messages.yml, 23-sep-2026): el assistant de
+// Vapi tiene serverMessages: ["end-of-call-report"] pero server.secret está
+// SIN configurar (secretSet: false) — hoy Vapi NO manda x-vapi-secret con este
+// evento. Por eso el modo por defecto es 'warn' (deja pasar + loguea + UN
+// aviso a Telegram) y no 'strict' (que cortaría el resumen de cada llamada
+// hasta que alguien active server.secret en el assistant, fuera del alcance
+// de esta tanda — es un cambio de Vapi, no de este servidor).
+const VAPI_END_OF_CALL_AUTH_MODE = (process.env.VAPI_END_OF_CALL_AUTH || 'warn').toLowerCase();
+let warnedMissingEndOfCallSecret = false;
+
+function endOfCallAuthOk(req) {
+  const secret = process.env.VAPI_SECRET;
+  if (!secret) return false;
+  const auth = req.headers['x-vapi-secret'] || req.headers['authorization'];
+  return !!auth && auth.replace('Bearer ', '') === secret;
+}
 
 // ─── VAPI: inyectar fecha actual al inicio de cada llamada ────────────────────
 app.get('/vapi/assistant-config', (req, res) => res.json({ ok: true }));
@@ -366,6 +484,22 @@ app.post('/vapi/assistant-config', (req, res) => {
 
   // Resumen post-llamada a Telegram
   if (eventType === 'end-of-call-report') {
+    if (!endOfCallAuthOk(req)) {
+      if (VAPI_END_OF_CALL_AUTH_MODE === 'strict') {
+        console.warn('[end-of-call] RECHAZADO: informe sin secreto válido (modo strict)');
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      console.warn('[end-of-call] Informe SIN secreto válido — dejando pasar (modo warn)');
+      if (!warnedMissingEndOfCallSecret) {
+        warnedMissingEndOfCallSecret = true;
+        sendTelegram(
+          '⚠️ Konk Bot: el informe de fin de llamada llega sin secreto válido (x-vapi-secret). '
+          + 'Cualquiera que conozca la URL podría inyectar informes falsos. '
+          + 'Revisar server.secret en el assistant de Vapi (no configurado a día de hoy).',
+          { threadId: require('./encargado').hilo('ALERTAS') }
+        ).catch(e => console.error('[end-of-call] Error avisando falta de secreto:', e.message));
+      }
+    }
     const msg = req.body?.message;
     console.log('[end-of-call] Recibido evento fin de llamada');
     console.log('[end-of-call] Campos disponibles:', JSON.stringify({
@@ -489,18 +623,26 @@ Endpoints Vapi:
   POST /vapi/assistant-config   ← end-of-call-report + assistant-request
 
 OAuth:
-  GET  /auth/cloudbeds?token=TU_VAPI_SECRET  ← autorizar Cloudbeds
-  GET  /auth/cloudbeds/callback              ← callback automático
+  GET  /auth/cloudbeds   (cabecera x-vapi-secret) ← devuelve la URL para autorizar Cloudbeds
+  GET  /auth/cloudbeds/callback                   ← callback automático
 
   GET  /health                               ← estado del servidor
 `);
 
   // Avisar si falta configuración crítica
   if (!process.env.CLOUDBEDS_CLIENT_ID) console.warn('⚠️  CLOUDBEDS_CLIENT_ID no configurado');
-  if (!process.env.CLOUDBEDS_REFRESH_TOKEN) console.warn('⚠️  CLOUDBEDS_REFRESH_TOKEN no configurado — visita /auth/cloudbeds para autorizar');
+  if (!process.env.CLOUDBEDS_REFRESH_TOKEN) console.warn('⚠️  CLOUDBEDS_REFRESH_TOKEN no configurado — autoriza con: curl -H "x-vapi-secret: $VAPI_SECRET" .../auth/cloudbeds');
   if (!process.env.TELEGRAM_BOT_TOKEN) console.warn('⚠️  TELEGRAM_BOT_TOKEN no configurado');
-  if (!process.env.VAPI_SECRET) console.warn('⚠️  VAPI_SECRET no configurado — los endpoints no están protegidos');
-
+  // H8: fail-closed — sin VAPI_SECRET, las rutas protegidas devuelven 503 (no
+  // pasan sin auth). El proceso sigue arrancado; solo avisamos UNA vez.
+  if (!process.env.VAPI_SECRET) {
+    console.warn('⚠️  VAPI_SECRET no configurado — las rutas protegidas responden 503 hasta que se configure');
+    sendTelegram(
+      '⚠️ Konk Bot: VAPI_SECRET no está configurado en este arranque. '
+      + 'Las rutas protegidas (disponibilidad, incidencias, tiempo, panel admin) responden 503 hasta que se configure.',
+      { threadId: require('./encargado').hilo('ALERTAS') }
+    ).catch(e => console.error('[arranque] Error avisando falta de VAPI_SECRET:', e.message));
+  }
 
 });
 
