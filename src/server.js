@@ -10,6 +10,7 @@ const { buildReply } = require('./availability');
 const vigilante = require('./vigilante');
 
 const path = require('path');
+const fs = require('fs');
 const app = express();
 app.use(express.json());
 
@@ -126,6 +127,36 @@ app.get('/auth/cloudbeds/callback', async (req, res) => {
 // Cloudbeds está caído un buen rato.
 let lastCloudbedsAlertAt = 0;
 const CLOUDBEDS_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+
+// ─── Cooldown persistente para avisos de arranque ────────────────────────────
+// Un contador en memoria no sirve de cooldown para avisos que se disparan
+// en el arranque: si el proceso entra en crash-loop, cada reinicio vuelve a
+// tener memoria limpia y el tema ALERTAS se llenaría de spam. Se usa una
+// marca en disco (DATA_DIR, igual que el vigilante) que sobrevive a los
+// reinicios y, si hay volumen montado en EasyPanel, también a los redeploys.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+const ALERTA_ARRANQUE_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 horas
+
+/**
+ * true si toca avisar (no hay marca previa o tiene más de `cooldownMs`).
+ * Si toca avisar, actualiza la marca en el momento (no al enviar), para que
+ * dos arranques seguidos en el mismo minuto no duplique el aviso.
+ */
+function debeAvisarConCooldown(marcaPath, cooldownMs) {
+  try {
+    const stat = fs.statSync(marcaPath);
+    if (Date.now() - stat.mtimeMs < cooldownMs) return false;
+  } catch (e) {
+    // No existe la marca (primera vez o se borró el volumen) → toca avisar.
+  }
+  try {
+    fs.mkdirSync(path.dirname(marcaPath), { recursive: true });
+    fs.writeFileSync(marcaPath, String(Date.now()));
+  } catch (e) {
+    console.error('[Cooldown] No se pudo escribir la marca', marcaPath, '—', e.message);
+  }
+  return true;
+}
 
 function extractVapiCallInfo(req) {
   const phone =
@@ -634,14 +665,20 @@ OAuth:
   if (!process.env.CLOUDBEDS_REFRESH_TOKEN) console.warn('⚠️  CLOUDBEDS_REFRESH_TOKEN no configurado — autoriza con: curl -H "x-vapi-secret: $VAPI_SECRET" .../auth/cloudbeds');
   if (!process.env.TELEGRAM_BOT_TOKEN) console.warn('⚠️  TELEGRAM_BOT_TOKEN no configurado');
   // H8: fail-closed — sin VAPI_SECRET, las rutas protegidas devuelven 503 (no
-  // pasan sin auth). El proceso sigue arrancado; solo avisamos UNA vez.
+  // pasan sin auth). El proceso sigue arrancado; el log en consola se ve en
+  // cada arranque, pero el aviso a Telegram lleva cooldown de 6h para no
+  // inundar ALERTAS si el proceso entra en crash-loop.
   if (!process.env.VAPI_SECRET) {
     console.warn('⚠️  VAPI_SECRET no configurado — las rutas protegidas responden 503 hasta que se configure');
-    sendTelegram(
-      '⚠️ Konk Bot: VAPI_SECRET no está configurado en este arranque. '
-      + 'Las rutas protegidas (disponibilidad, incidencias, tiempo, panel admin) responden 503 hasta que se configure.',
-      { threadId: require('./encargado').hilo('ALERTAS') }
-    ).catch(e => console.error('[arranque] Error avisando falta de VAPI_SECRET:', e.message));
+    if (debeAvisarConCooldown(path.join(DATA_DIR, '.alerta-vapi-secret'), ALERTA_ARRANQUE_COOLDOWN_MS)) {
+      sendTelegram(
+        '⚠️ Konk Bot: VAPI_SECRET no está configurado en este arranque. '
+        + 'Las rutas protegidas (disponibilidad, incidencias, tiempo, panel admin) responden 503 hasta que se configure.',
+        { threadId: require('./encargado').hilo('ALERTAS') }
+      ).catch(e => console.error('[arranque] Error avisando falta de VAPI_SECRET:', e.message));
+    } else {
+      console.warn('[arranque] Aviso a Telegram omitido (cooldown 6h, ya se avisó recientemente)');
+    }
   }
 
 });
