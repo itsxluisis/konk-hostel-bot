@@ -158,6 +158,31 @@ function login(user, pass) {
     assert.strictEqual(seenAuth, 'Bearer test-vapi-api-key-nunca-debe-salir');
   });
 
+  await t('un error de Vapi (500) en el proxy no filtra el body de Vapi ni la Authorization al panel', async () => {
+    const marker = 'NUNCA-DEBE-LLEGAR-AL-PANEL-' + Math.random().toString(36).slice(2);
+    requestHandler = async () => {
+      const e = new Error('Request failed with status code 500');
+      e.response = {
+        status: 500,
+        data: { message: marker, secretoInterno: 'cosas-de-vapi-que-no-son-nuestras' },
+        headers: { 'x-vapi-internal': 'no-deberia-salir', Authorization: 'Bearer algo-de-vapi' },
+      };
+      throw e;
+    };
+    const login4 = await login('admin', 'test-admin-password-x7');
+    const { token } = await login4.json();
+    const r = await fetch(`${BASE}/admin/vapi/calls`, { headers: { 'x-admin-token': token } });
+    assert.strictEqual(r.status, 502);
+    const bodyText = await r.text();
+    assert.ok(!bodyText.includes(marker), 'el body de error de Vapi se ha filtrado al panel');
+    assert.ok(!bodyText.includes('test-vapi-api-key-nunca-debe-salir'), 'la API key ha aparecido en la respuesta de error');
+    assert.ok(!bodyText.toLowerCase().includes('bearer'), 'no debe filtrarse ninguna cabecera Authorization/Bearer');
+    assert.ok(!r.headers.get('authorization'), 'la cabecera Authorization no debe reenviarse al panel');
+    assert.ok(!r.headers.get('x-vapi-internal'), 'no deben reenviarse cabeceras de Vapi sin más');
+    assert.deepStrictEqual(JSON.parse(bodyText), { error: 'Error consultando Vapi' });
+    requestHandler = async () => ({ data: [] }); // deja el mock en un estado neutro para lo que siga
+  });
+
   await t('/admin/vapi/calls sin sesión ni Basic auth: 401 (no cuela sin credenciales)', async () => {
     const r = await fetch(`${BASE}/admin/vapi/calls`);
     assert.strictEqual(r.status, 401);
@@ -174,11 +199,30 @@ function login(user, pass) {
     assert.ok(!raw.includes('test-vapi-secret-actual'), '/health no debe filtrar el valor del secreto');
   });
 
+  await t('trust proxy: cada X-Forwarded-For tiene su propio cupo (no se comparte entre "clientes")', async () => {
+    // Sin app.set('trust proxy', 1), req.ip sería siempre la IP de Traefik
+    // (el proxy interno de EasyPanel) para TODAS las peticiones: 10 intentos
+    // fallidos de cualquiera bloquearían a Luis 15 minutos. Con trust proxy
+    // activo, cada X-Forwarded-For declarado por el proxy tiene su propio
+    // contador — un solo intento fallido por IP no debe bloquear a nadie.
+    for (let i = 0; i < 12; i++) {
+      const r = await fetch(`${BASE}/admin/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `198.51.100.${i}` },
+        body: JSON.stringify({ user: 'admin', pass: 'mala-' + i }),
+      });
+      assert.strictEqual(r.status, 401, `intento ${i} desde una IP distinta no debería estar bloqueado (¿falta trust proxy?)`);
+    }
+  });
+
   // ── Rate-limit: SIEMPRE el último bloque, agota el cupo de intentos de esta IP ──
-  await t('rate-limit de /admin/login: 10 intentos/15min por IP, el 11º devuelve 429', async () => {
+  await t('rate-limit compartido: agotado el cupo, también se rechaza Basic auth (aunque las credenciales sean correctas) y una sesión previa sigue sirviendo', async () => {
+    // Sesión conseguida ANTES de agotar el cupo: una IP bloqueada para
+    // login/Basic no debe cerrarle la sesión a quien ya la tenía.
+    const preBlock = await login('admin', 'test-admin-password-x7');
+    const { token: preBlockToken } = await preBlock.json();
+
     let last = null;
-    // Ya hemos hecho varios intentos arriba desde este mismo proceso (misma IP
-    // 127.0.0.1); consumimos el resto del cupo con intentos fallidos.
     for (let i = 0; i < 15; i++) {
       last = await login('admin', 'password-incorrecta-' + i);
       if (last.status === 429) break;
@@ -186,6 +230,19 @@ function login(user, pass) {
     assert.strictEqual(last.status, 429);
     const body = await last.json();
     assert.strictEqual(body.ok, false);
+
+    // Con la IP ya bloqueada: ni siquiera un login correcto pasa...
+    const correctoPeroBloqueado = await login('admin', 'test-admin-password-x7');
+    assert.strictEqual(correctoPeroBloqueado.status, 429);
+
+    // ...ni Basic auth con las credenciales correctas contra OTRA ruta.
+    const basic = 'Basic ' + Buffer.from('admin:test-admin-password-x7').toString('base64');
+    const basicBloqueado = await fetch(`${BASE}/admin/vigilante`, { headers: { Authorization: basic } });
+    assert.strictEqual(basicBloqueado.status, 401, 'Basic con credenciales correctas no debe colar con la IP bloqueada');
+
+    // Pero la sesión conseguida antes del bloqueo sigue funcionando.
+    const conSesionPrevia = await fetch(`${BASE}/admin/reservations-today`, { headers: { 'x-admin-token': preBlockToken } });
+    assert.strictEqual(conSesionPrevia.status, 200, 'una sesión ya emitida no debe verse afectada por el bloqueo de la IP');
   });
 
   console.log(`\n${'='.repeat(40)}\n${pasan} OK, ${fallan} fallos`);
