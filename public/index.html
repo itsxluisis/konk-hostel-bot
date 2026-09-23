@@ -293,7 +293,7 @@ var ROADMAP = [
     title: 'Confirmar Cloudbeds OAuth',
     status: 'fase2',
     desc: 'Verificar que CLOUDBEDS_REFRESH_TOKEN está activo en EasyPanel y que el token no ha expirado.',
-    detail: 'En EasyPanel → env vars → confirmar CLOUDBEDS_REFRESH_TOKEN. Luego GET /health y verificar que cloudbeds aparece como "authorized". Si no, volver a autorizar en /auth/cloudbeds?token=TU_VAPI_SECRET.'
+    detail: 'En EasyPanel → env vars → confirmar CLOUDBEDS_REFRESH_TOKEN. Luego GET /health y verificar que cloudbeds aparece como "ok". Si no, reautorizar: GET /auth/cloudbeds con cabecera x-vapi-secret devuelve la URL de Cloudbeds (curl -H "x-vapi-secret: TU_SECRETO" .../auth/cloudbeds).'
   }
 ];
 
@@ -395,7 +395,7 @@ function refreshStatus() {
       return '<div class="sdot"><span class="dot ' + (s ? 'dg' : 'dr') + '"></span>' + l + '</div>';
     };
     document.getElementById('sfooter').innerHTML =
-      ok(h.cloudbeds === 'authorized', 'Cloudbeds') +
+      ok(h.cloudbeds === 'ok', 'Cloudbeds') +
       ok(h.telegram === 'configured', 'Telegram') +
       ok(true, 'Servidor') +
       '<button class="logoutbtn" id="logoutbtn">Cerrar sesión</button>';
@@ -527,7 +527,7 @@ function renderDashboard() {
       '<div class="card"><div class="chd"><span class="ctitle">Reservas hoy</span><button class="btn btn-sm" onclick="goTab(\'reservations\')">Ver →</button></div>' + resHtml + '</div>',
       '</div>',
       '<div class="grid g2" style="margin-top:10px">',
-      '<div class="card"><div class="chd"><span class="ctitle">Sistema</span></div><div style="font-family:var(--mono);font-size:11px;line-height:2;color:var(--t2)">Cloudbeds <span style="color:' + (h.cloudbeds === 'authorized' ? 'var(--green)' : 'var(--red)') + '">' + (h.cloudbeds === 'authorized' ? '✓' : '✗') + '</span><br>Telegram <span style="color:' + (h.telegram === 'configured' ? 'var(--green)' : 'var(--red)') + '">' + (h.telegram === 'configured' ? '✓' : '✗') + '</span><br>GitHub CI <span style="color:var(--green)">✓</span></div></div>',
+      '<div class="card"><div class="chd"><span class="ctitle">Sistema</span></div><div style="font-family:var(--mono);font-size:11px;line-height:2;color:var(--t2)">Cloudbeds <span style="color:' + (h.cloudbeds === 'ok' ? 'var(--green)' : 'var(--red)') + '">' + (h.cloudbeds === 'ok' ? '✓' : '✗') + '</span><br>Telegram <span style="color:' + (h.telegram === 'configured' ? 'var(--green)' : 'var(--red)') + '">' + (h.telegram === 'configured' ? '✓' : '✗') + '</span><br>GitHub CI <span style="color:var(--green)">✓</span></div></div>',
       '<div class="card"><div class="chd"><span class="ctitle">Pendientes</span><button class="btn btn-sm" onclick="goTab(\'roadmap\')">Ver →</button></div>' + (pendingHtml || '<div class="empty" style="padding:12px">Todo implementado</div>') + '</div>',
       '</div>'
     ].join('');
@@ -819,7 +819,7 @@ function renderSettings() {
   var c = document.getElementById('content');
   var cost = localStorage.getItem('kvcost') || '0.11';
 
-  c.innerHTML = '<div class="grid g2"><div class="card"><div class="ctitle">Seguridad</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.8;margin-bottom:12px">Usuario y contraseña configurados en EasyPanel como ADMIN_USER y ADMIN_PASSWORD.<br>Webhook secret: VAPI_SECRET en EasyPanel.</div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Regenerar API key Vapi</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">1. vapi.ai → Account → API Keys → revocar y crear nueva<br>2. gh secret set VAPI_API_KEY --repo itsxluisis/konk-hostel-bot<br>3. Actualizar en EasyPanel env vars</div></div><div class="card"><div class="ctitle">Coste por minuto</div><div class="field"><label>Tarifa actual (€/min)</label><input type="number" id="vcost" value="' + cost + '" step="0.001" min="0"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:4px">Actualiza si cambias de plan en Vapi</div><button class="btn" style="margin-top:6px" id="savevcostbtn">Guardar</button></div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Cloudbeds OAuth</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">Para reautorizar: GET /auth/cloudbeds?token=TU_VAPI_SECRET<br>Callback: /auth/cloudbeds/callback<br>Luego copiar CLOUDBEDS_REFRESH_TOKEN a EasyPanel.</div></div></div>';
+  c.innerHTML = '<div class="grid g2"><div class="card"><div class="ctitle">Seguridad</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.8;margin-bottom:12px">Usuario y contraseña configurados en EasyPanel como ADMIN_USER y ADMIN_PASSWORD.<br>Webhook secret: VAPI_SECRET en EasyPanel.</div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Regenerar API key Vapi</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">1. vapi.ai → Account → API Keys → revocar y crear nueva<br>2. gh secret set VAPI_API_KEY --repo itsxluisis/konk-hostel-bot<br>3. Actualizar en EasyPanel env vars</div></div><div class="card"><div class="ctitle">Coste por minuto</div><div class="field"><label>Tarifa actual (€/min)</label><input type="number" id="vcost" value="' + cost + '" step="0.001" min="0"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:4px">Actualiza si cambias de plan en Vapi</div><button class="btn" style="margin-top:6px" id="savevcostbtn">Guardar</button></div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Cloudbeds OAuth</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">Para reautorizar: GET /auth/cloudbeds con cabecera x-vapi-secret (curl -H "x-vapi-secret: TU_SECRETO" .../auth/cloudbeds) devuelve la URL de Cloudbeds; ábrela en el navegador.<br>Callback: /auth/cloudbeds/callback<br>Luego copiar CLOUDBEDS_REFRESH_TOKEN a EasyPanel.</div></div></div>';
 
   document.getElementById('savevcostbtn').addEventListener('click', function() {
     localStorage.setItem('kvcost', document.getElementById('vcost').value);
