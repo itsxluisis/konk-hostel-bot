@@ -40,34 +40,15 @@ app.use('/admin-panel', express.static(path.join(__dirname, '../public')));
 
 // ─── Límite de fuerza bruta compartido (login + Basic auth) ──────────────────
 // Sin dependencias nuevas: contador en memoria por IP, 10 intentos FALLIDOS
-// / 15 min. Cubre POST /admin/login Y cualquier intento de HTTP Basic con
+// / 15 min (src/login-rate-limit.js, con purga propia de entradas vencidas).
+// Cubre POST /admin/login Y cualquier intento de HTTP Basic con
 // ADMIN_USER/ADMIN_PASSWORD equivocados en CUALQUIER ruta protegida por
 // adminAuth/vapiAuth — si solo protegiéramos /admin/login, se podría probar
 // la contraseña sin límite contra, p. ej., GET /admin/vigilante. Una sesión
 // de panel válida (x-admin-token) nunca cuenta ni se ve afectada por un
 // bloqueo: es un token de alta entropía, adivinarlo no es viable por fuerza
 // bruta. En memoria: se resetea en cada redeploy, igual que las sesiones.
-const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_RATE_LIMIT_MAX = 10;
-const loginAttemptsByIp = new Map(); // ip -> { count, windowStart }
-
-function isIpBlocked(ip) {
-  const entry = loginAttemptsByIp.get(ip);
-  if (!entry) return false;
-  if (Date.now() - entry.windowStart > LOGIN_RATE_LIMIT_WINDOW_MS) return false;
-  return entry.count > LOGIN_RATE_LIMIT_MAX;
-}
-
-/** Cuenta un intento fallido (login o Basic auth) para esta IP. */
-function registerFailedAttempt(ip) {
-  const now = Date.now();
-  const entry = loginAttemptsByIp.get(ip);
-  if (!entry || now - entry.windowStart > LOGIN_RATE_LIMIT_WINDOW_MS) {
-    loginAttemptsByIp.set(ip, { count: 1, windowStart: now });
-    return;
-  }
-  entry.count += 1;
-}
+const { isBlocked: isIpBlocked, registerFailedAttempt } = require('./login-rate-limit');
 
 // ─── Middleware: verificar que la llamada viene de Vapi ───────────────────────
 // Fail-closed (H8): sin VAPI_SECRET configurado, las rutas protegidas
