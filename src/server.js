@@ -7,6 +7,7 @@ const express = require('express');
 const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
+const { normalizeStayDates, spokenDate, buildForwardCalendar } = require('./stay-dates');
 const vigilante = require('./vigilante');
 const { matchedSecretKind, timingSafeEqualStr } = require('./secret-auth');
 const secretMatchCounters = require('./secret-match-counters');
@@ -296,6 +297,23 @@ async function alertCloudbedsFailure(req, err) {
   }
 }
 
+// ─── V1.2: guarda de fechas pasadas en get_availability ──────────────────────
+// 24-sep-2026 (docs/plan-mejora-voz-sep-2026.md): un huésped real pidió
+// "entrar mañana y salir el domingo" y gpt-4o-mini llamó a get_current_date y
+// get_availability EN PARALELO, mandando fechas de hace varios años —no un
+// año mal escrito, fechas inventadas—. Cloudbeds contesta success:false
+// ("startDate should be greater than today") y eso se oía como un error
+// técnico + disparaba una alerta a Telegram. Corregir la fecha nosotros
+// mismos habría podido dar una fecha igual de falsa (ver src/stay-dates.js),
+// así que NINGÚN checkin pasado se corrige solo: se rechaza sin llamar a
+// Cloudbeds ni avisar a Telegram, y se le pide al MODELO —no al huésped—
+// que recalcule con un calendario real.
+const MISSING_DATES_MSG = 'Necesito las fechas de entrada y salida para consultar disponibilidad.';
+
+// Contador para /health (visibilidad de cuánto dispara esta guarda; nunca
+// bloquea nada ni cambia la respuesta al bot).
+const availabilityDateRejections = { count: 0, lastAt: null };
+
 // ─── VAPI TOOL: get_availability ─────────────────────────────────────────────
 app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   const args = getToolArgs(req);
@@ -305,27 +323,60 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   const preference = args.preference || args.room_type || 'any';
 
   if (!checkin_date || !checkout_date) {
-    return vapiReply(req, res, 'Necesito las fechas de entrada y salida para consultar disponibilidad.');
+    return vapiReply(req, res, MISSING_DATES_MSG);
   }
 
-  if (checkin_date >= checkout_date) {
+  // "Hoy" en Europe/Madrid con toLocaleDateString('en-CA', ...) — NO con el
+  // truco toLocaleString+toISOString (ver más abajo, nowMurcia): ese truco
+  // desplaza el DÍA según la zona horaria del contenedor. Se calcula aquí
+  // (único punto de I/O de reloj del handler) y se pasa al helper puro.
+  const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+
+  const normalized = normalizeStayDates(checkin_date, checkout_date, todayISO);
+  if (!normalized.ok) {
+    if (normalized.reason === 'formato') {
+      return vapiReply(req, res, MISSING_DATES_MSG);
+    }
+    // reason === 'pasada': ni Cloudbeds ni alerta a Telegram — no es un
+    // fallo técnico (H1), es una fecha que el modelo calculó mal. El
+    // mensaje va dirigido al modelo (no es para leerlo en voz alta tal
+    // cual): trae un calendario real para que recalcule, sin decirle al
+    // huésped que hubo un error.
+    availabilityDateRejections.count++;
+    availabilityDateRejections.lastAt = new Date().toISOString();
+    console.log(`[get-availability] fecha pasada rechazada: ${checkin_date}→${checkout_date} (hoy ${todayISO}, nextOccurrence=${normalized.nextOccurrence || 'n/d'})`);
+
+    const calendar = buildForwardCalendar(todayISO, 14);
+    const nextLine = normalized.nextOccurrence
+      ? ` Si el huésped hablaba de ese mismo día del año que viene, la entrada sería ${normalized.nextOccurrence}.`
+      : '';
+    return vapiReply(req, res,
+      `FECHAS NO VÁLIDAS: la entrada ${checkin_date} ya ha pasado. Hoy es ${spokenDate(todayISO, { withYear: true })} (${todayISO}). `
+      + `No le digas al huésped que hay un error. Vuelve a calcular las fechas que pidió con este calendario: ${calendar}.`
+      + `${nextLine} Si no está claro, pregúntale la fecha. Después vuelve a llamar a get_availability.`
+    );
+  }
+
+  const stayCheckin = normalized.checkin;
+  const stayCheckout = normalized.checkout;
+
+  if (stayCheckin >= stayCheckout) {
     return vapiReply(req, res, 'La salida tiene que ser al menos un día después de la entrada. ¿Para qué día sería el checkout?');
   }
 
   // Corte de reservas: misma noche a partir de las 22:30 (hora de Murcia)
   const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
-  const todayISO = nowMurcia.toISOString().split('T')[0];
   const h = nowMurcia.getHours(), m = nowMurcia.getMinutes();
-  if (checkin_date === todayISO && (h > 22 || (h === 22 && m >= 30))) {
+  if (stayCheckin === todayISO && (h > 22 || (h === 22 && m >= 30))) {
     return vapiReply(req, res, 'Lo siento, las reservas para esta noche ya han cerrado. El plazo límite son las diez y media de la noche. ¿Te consulto disponibilidad para mañana u otra fecha?');
   }
 
-  console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} pax, pref=${preference})`);
+  console.log(`[get-availability] ${stayCheckin} → ${stayCheckout} (${guests} pax, pref=${preference})`);
 
   try {
-    const { rooms, totalCapacity, nights } = await getAvailability(checkin_date, checkout_date, guests);
+    const { rooms, totalCapacity, nights } = await getAvailability(stayCheckin, stayCheckout, guests);
     // Fallback por si Cloudbeds no devolviera nights: calcularlo de las fechas
-    const stayNights = nights || Math.max(1, Math.round((new Date(checkout_date) - new Date(checkin_date)) / 86400000));
+    const stayNights = nights || Math.max(1, Math.round((new Date(stayCheckout) - new Date(stayCheckin)) / 86400000));
     const reply = buildReply({ rooms, totalCapacity, guests, preference, nights: stayNights });
     console.log(`[get-availability] reply: ${reply}`);
     return vapiReply(req, res, reply);
@@ -769,6 +820,10 @@ app.get('/health', async (req, res) => {
     // legacyUnsigned=0 tras una llamada de prueba con el secreto nuevo (ver
     // src/secret-match-counters.js). Solo números/fechas, nunca secretos.
     ...secretMatchCounters.snapshot(),
+    // V1.2: cuántas veces get_availability ha rechazado un checkin_date
+    // pasado (ver arriba) — nunca bloquea nada, es solo visibilidad de
+    // cuánto se dispara la guarda.
+    availabilityDateRejections: { ...availabilityDateRejections },
   });
 });
 
