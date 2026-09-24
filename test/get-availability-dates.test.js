@@ -54,7 +54,7 @@ delete process.env.ENCARGADO_SECRET;
 // Sembrar el token de Cloudbeds en memoria (misma instancia de módulo que
 // usará src/server.js, porque Node cachea por ruta absoluta resuelta).
 const cloudbeds = realRequire.call(module, path.join(__dirname, '../src/cloudbeds.js'));
-const { normalizeStayDates, spokenDateRangePrefix } = realRequire.call(module, path.join(__dirname, '../src/stay-dates.js'));
+const { normalizeStayDates, spokenDate, spokenDateRangePrefix } = realRequire.call(module, path.join(__dirname, '../src/stay-dates.js'));
 postHandler = async () => ({ data: { access_token: 'tok123', refresh_token: 'reftok123', expires_in: 3600 } });
 
 const app = realRequire.call(module, path.join(__dirname, '../src/server.js'));
@@ -99,11 +99,11 @@ function callAvailability(body) {
 
   console.log('\nget-availability · V1.2 guarda de fechas pasadas (rediseño 24-sep-2026: nunca se corrige sola)\n');
 
-  await t('caso real: fechas inventadas de hace años (2023-10-07→08) — NO llama a Cloudbeds, mensaje dirigido al modelo con calendario (incluye mañana) y nextOccurrence', async () => {
+  await t('caso real: fechas inventadas de hace años (2023-10-07→08) — NO llama a Cloudbeds; rechazo hablado natural, sin ISO/año/"error" (hallazgo ALTA del auditor: el prompt lee la respuesta tal cual)', async () => {
     const todayISO = todayMadridISO();
     const expected = normalizeStayDates('2023-10-07', '2023-10-08', todayISO);
     assert.strictEqual(expected.reason, 'pasada');
-    const manana = isoPlusDays(todayISO, 1);
+    const expectedSpokenToday = spokenDate(todayISO);
 
     cloudbedsCalls = 0;
     requestHandler = async () => { throw new Error('Cloudbeds NO debería llamarse para un checkin pasado'); };
@@ -111,19 +111,21 @@ function callAvailability(body) {
     const r = await callAvailability({ checkin_date: '2023-10-07', checkout_date: '2023-10-08', guests: 2 });
     assert.strictEqual(r.status, 200);
     const body = await r.json();
-    assert.ok(body.result.startsWith('FECHAS NO VÁLIDAS'), `debía empezar por FECHAS NO VÁLIDAS: ${body.result}`);
-    assert.ok(body.result.includes('No le digas al huésped que hay un error'), 'falta la instrucción de no confesar el error al huésped');
-    assert.ok(body.result.includes(manana), `el calendario debía incluir mañana (${manana}): ${body.result}`);
-    assert.ok(body.result.includes(expected.nextOccurrence), `debía sugerir nextOccurrence (${expected.nextOccurrence}): ${body.result}`);
+    assert.ok(body.result.includes('no he entendido bien las fechas'), `debía incluir la frase de rechazo hablada: ${body.result}`);
+    assert.ok(body.result.includes(expectedSpokenToday), `debía decir la fecha de hoy en español (${expectedSpokenToday}): ${body.result}`);
+    assert.ok(!body.result.includes('FECHAS NO VÁLIDAS'), 'no debe quedar el texto antiguo dirigido al modelo');
+    assert.ok(!/error/i.test(body.result), 'el huésped no debe oír la palabra "error"');
+    assert.ok(!/\d{4}-\d{2}-\d{2}/.test(body.result), `no debe haber ninguna fecha ISO en el texto hablado: ${body.result}`);
     assert.strictEqual(cloudbedsCalls, 0, 'no debía llamarse a Cloudbeds para un checkin pasado');
   });
 
-  await t('año mal calculado (2026-01-15, enero de este año): rechazo que sugiere 2027-01-15, sin llamar a Cloudbeds', async () => {
+  await t('año mal calculado (2026-01-15, enero de este año): mismo rechazo hablado, sin sugerir ninguna fecha ISO, sin llamar a Cloudbeds', async () => {
     cloudbedsCalls = 0;
     requestHandler = async () => { throw new Error('Cloudbeds NO debería llamarse para un checkin pasado'); };
     const r = await callAvailability({ checkin_date: '2026-01-15', checkout_date: '2026-01-18', guests: 2 });
     const body = await r.json();
-    assert.ok(body.result.includes('2027-01-15'), `debía sugerir 2027-01-15: ${body.result}`);
+    assert.ok(body.result.includes('no he entendido bien las fechas'), `esperaba el rechazo hablado: ${body.result}`);
+    assert.ok(!/\d{4}-\d{2}-\d{2}/.test(body.result), `ya no debe sugerir nextOccurrence en ISO (antes: 2027-01-15): ${body.result}`);
     assert.strictEqual(cloudbedsCalls, 0);
   });
 
@@ -135,16 +137,16 @@ function callAvailability(body) {
     requestHandler = async () => { throw new Error('Cloudbeds NO debería llamarse para un checkin pasado'); };
     const r = await callAvailability({ checkin_date: checkin, checkout_date: checkout, guests: 2 });
     const body = await r.json();
-    assert.ok(body.result.startsWith('FECHAS NO VÁLIDAS'), `debía rechazarse igual que cualquier fecha pasada: ${body.result}`);
+    assert.ok(body.result.includes('no he entendido bien las fechas'), `debía rechazarse igual que cualquier fecha pasada: ${body.result}`);
     assert.strictEqual(cloudbedsCalls, 0);
   });
 
-  await t('checkin_date de hoy: válido, sigue el flujo normal (llama a Cloudbeds, sin "FECHAS NO VÁLIDAS")', async () => {
+  await t('checkin_date de hoy: válido, sigue el flujo normal (llama a Cloudbeds, sin el rechazo)', async () => {
     mockEmptyAvailability();
     const todayISO = todayMadridISO();
     const r = await callAvailability({ checkin_date: todayISO, checkout_date: isoPlusDays(todayISO, 2), guests: 2 });
     const body = await r.json();
-    assert.ok(!body.result.includes('FECHAS NO VÁLIDAS'), `hoy es válido, no debía rechazarse: ${body.result}`);
+    assert.ok(!body.result.includes('no he entendido bien las fechas'), `hoy es válido, no debía rechazarse: ${body.result}`);
   });
 
   await t('checkin_date futuro (caso normal): llama a Cloudbeds y responde el texto de buildReply de siempre', async () => {
@@ -154,7 +156,7 @@ function callAvailability(body) {
     const checkout = isoPlusDays(checkin, 2);
     const r = await callAvailability({ checkin_date: checkin, checkout_date: checkout, guests: 2 });
     const body = await r.json();
-    assert.ok(!body.result.includes('FECHAS NO VÁLIDAS'));
+    assert.ok(!body.result.includes('no he entendido bien las fechas'));
     assert.ok(body.result.includes('No tenemos disponibilidad'), `esperaba la respuesta normal de buildReply: ${body.result}`);
   });
 

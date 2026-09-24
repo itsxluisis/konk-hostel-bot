@@ -7,7 +7,7 @@ const express = require('express');
 const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
-const { normalizeStayDates, spokenDate, buildForwardCalendar, spokenDateRangePrefix } = require('./stay-dates');
+const { normalizeStayDates, spokenDate, spokenDateRangePrefix } = require('./stay-dates');
 const vigilante = require('./vigilante');
 const { matchedSecretKind, timingSafeEqualStr } = require('./secret-auth');
 const secretMatchCounters = require('./secret-match-counters');
@@ -357,22 +357,24 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
       return vapiReply(req, res, MISSING_DATES_MSG);
     }
     // reason === 'pasada': ni Cloudbeds ni alerta a Telegram — no es un
-    // fallo técnico (H1), es una fecha que el modelo calculó mal. El
-    // mensaje va dirigido al modelo (no es para leerlo en voz alta tal
-    // cual): trae un calendario real para que recalcule, sin decirle al
-    // huésped que hubo un error.
+    // fallo técnico (H1), es una fecha que el modelo calculó mal.
+    //
+    // Fix (hallazgo ALTA del auditor, 24-sep-2026): vapi/system-prompt.md
+    // le dice al modelo que lea la respuesta de esta tool ENTERA Y TAL
+    // CUAL — así que el texto anterior, dirigido al modelo ("FECHAS NO
+    // VÁLIDAS... No le digas al huésped que hay un error..."), se estaba
+    // leyendo en voz alta al huésped. Arreglado SIN tocar el prompt: el
+    // texto de aquí tiene que valer para decirse tal cual, sin ISO, sin
+    // calendario y sin la palabra "error". El modelo ya sabe la fecha de
+    // hoy por el prompt y recalcula cuando el huésped repite las fechas.
+    // normalizeStayDates() sigue calculando nextOccurrence (se loguea, útil
+    // para depurar) pero ya no se dice.
     availabilityDateRejections.count++;
     availabilityDateRejections.lastAt = new Date().toISOString();
     console.log(`[get-availability] fecha pasada rechazada: ${checkin_date}→${checkout_date} (hoy ${todayISO}, nextOccurrence=${normalized.nextOccurrence || 'n/d'})`);
 
-    const calendar = buildForwardCalendar(todayISO, 14);
-    const nextLine = normalized.nextOccurrence
-      ? ` Si el huésped hablaba de ese mismo día del año que viene, la entrada sería ${normalized.nextOccurrence}.`
-      : '';
     return vapiReply(req, res,
-      `FECHAS NO VÁLIDAS: la entrada ${checkin_date} ya ha pasado. Hoy es ${spokenDate(todayISO, { withYear: true })} (${todayISO}). `
-      + `No le digas al huésped que hay un error. Vuelve a calcular las fechas que pidió con este calendario: ${calendar}.`
-      + `${nextLine} Si no está claro, pregúntale la fecha. Después vuelve a llamar a get_availability.`
+      `Perdona, no he entendido bien las fechas. Hoy es ${spokenDate(todayISO)}. ¿Qué día quieres entrar y qué día salir?`
     );
   }
 
