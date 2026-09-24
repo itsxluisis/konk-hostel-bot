@@ -7,6 +7,15 @@
 // consulta y devuelve siempre el mismo listado crudo — el módulo tiene que
 // quedarse solo con lo que de verdad cumple startDate/endDate.
 //
+// Corrección de NEXO (24-sep-2026) contra la doc oficial de Cloudbeds: con
+// includeGuestsDetails=true, `guestList` es un OBJETO indexado por guestID
+// ("a map of guest IDs to guest objects"), NO un array — y `rooms[]` a nivel
+// de RESERVA solo llega si se pide includeAllRooms=true. Los fixtures de
+// aquí reproducen esa forma real (ver reserva()); hay un caso explícito de
+// regresión que habría fallado con la implementación anterior
+// (`Array.isArray(r.guestList) ? r.guestList : []`, que devolvía [] siempre
+// contra un guestList real).
+//
 // Cada caso que no es específicamente sobre la caché usa un "hoy" propio
 // (diaUnico()) para no compartir la clave de caché de 3 minutos con otro
 // caso — si dos casos usaran el mismo todayISO, el segundo leería del caché
@@ -69,23 +78,49 @@ function addDays(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
-function reserva({ id, first, last, checkin, checkout, status = 'confirmed', rooms, channel = 'Direct Booking', adults = 2, phone, guestListPhones }) {
-  return {
+// ─── Fixture con la forma REAL de Cloudbeds (includeGuestsDetails=true) ────
+// `guests`: array de { guestID, first, last, phone, cellPhone, isMainGuest,
+// roomName, assignedRoom, roomID, roomTypeName, rooms, unassignedRooms } que
+// se vuelca en un OBJETO indexado por guestID (guestList), no en un array.
+// `reservationRooms`: si se pasa, simula que Cloudbeds SÍ honró
+// includeAllRooms=true y devolvió rooms[] a nivel de RESERVA (objetos con
+// roomID/roomName/roomTypeID/roomTypeName/subReservationID).
+function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direct Booking', adults = 2, guests = [], reservationRooms, roomID, roomNumber }) {
+  const guestList = {};
+  guests.forEach((g, i) => {
+    const guestID = g.guestID || `G${i}`;
+    guestList[guestID] = {
+      guestID,
+      guestName: `${g.first} ${g.last}`,
+      guestFirstName: g.first,
+      guestLastName: g.last,
+      guestPhone: g.phone,
+      guestCellPhone: g.cellPhone,
+      guestEmail: g.email,
+      isMainGuest: !!g.isMainGuest,
+      assignedRoom: g.assignedRoom,
+      roomID: g.roomID,
+      roomName: g.roomName,
+      roomTypeName: g.roomTypeName,
+      rooms: g.rooms,
+      unassignedRooms: g.unassignedRooms,
+      startDate: checkin,
+      endDate: checkout,
+    };
+  });
+  const out = {
     reservationID: id,
-    guestFirstName: first,
-    guestLastName: last,
-    guestName: `${first} ${last}`,
     startDate: checkin,
     endDate: checkout,
     status,
     sourceName: channel,
     adults,
-    rooms: rooms ? rooms.map(r => ({ roomID: r })) : undefined,
-    guestPhone: phone,
-    guestList: guestListPhones
-      ? guestListPhones.map(p => ({ guestFirstName: first, guestLastName: last, guestPhone: p }))
-      : undefined,
+    guestList, // OBJETO indexado por guestID — forma real de Cloudbeds, NO un array.
   };
+  if (reservationRooms) out.rooms = reservationRooms;
+  if (roomID) out.roomID = roomID;
+  if (roomNumber) out.roomNumber = roomNumber;
+  return out;
 }
 
 (async () => {
@@ -132,9 +167,6 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
     assert.strictEqual(phonesMatch('+34612345678', '+44612345678'), false);
   });
   await t('un lado sin prefijo de país reconocible → se compara solo por los últimos 9 dígitos', () => {
-    // '512345678' no empieza por 6/7/8/9 (no se le añade +34) ni por '+':
-    // countryPrefixOf devuelve null para ese lado, así que el veto de
-    // prefijo se omite y basta con que coincidan los últimos 9 dígitos.
     assert.strictEqual(phonesMatch('512345678', '+34512345678'), true);
   });
   await t('demasiado corto (menos de 9 dígitos) → nunca coincide', () => {
@@ -144,7 +176,25 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
     assert.strictEqual(phonesMatch('test', '+34612345678'), false);
   });
 
-  console.log('\nfindStayByPhone:');
+  console.log('\nfindStayByPhone — forma real de Cloudbeds (guestList como objeto):\n');
+
+  await t('REGRESIÓN: guestList es un OBJETO indexado por guestID, no un array — con `Array.isArray(r.guestList) ? r.guestList : []` esto SIEMPRE fallaba (devolvía [] y nunca encontraba el teléfono)', async () => {
+    const hoy = diaUnico();
+    const r1 = reserva({
+      id: 'REGRESION-OBJETO',
+      checkin: hoy, checkout: addDays(hoy, 1),
+      guests: [{ guestID: 'g1', first: 'Diego', last: 'Fuentes', phone: '+34655001122', isMainGuest: true }],
+    });
+    // El propio fixture reproduce la forma real: un objeto, no un array.
+    assert.strictEqual(Array.isArray(r1.guestList), false, 'el fixture debe simular guestList como OBJETO, igual que Cloudbeds real');
+    assert.strictEqual(typeof r1.guestList, 'object');
+    assert.ok(r1.guestList.g1, 'indexado por guestID');
+    allReservations = [r1];
+    const r = await findStayByPhone('+34655001122', hoy);
+    assert.ok(r, 'debía encontrar el teléfono dentro de guestList aunque sea un objeto, no un array');
+    assert.strictEqual(r.firstName, 'Diego');
+    assert.strictEqual(r.reservationId, 'REGRESION-OBJETO');
+  });
 
   await t('sin teléfono → null sin tocar Cloudbeds', async () => {
     axiosCalls = 0;
@@ -156,7 +206,11 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('llegada hoy que coincide por teléfono (con espacios) → devuelve la estancia', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'R1', first: 'Marta', last: 'Ruiz', checkin: hoy, checkout: addDays(hoy, 2), rooms: ['12'], phone: '+34612345678' }),
+      reserva({
+        id: 'R1', checkin: hoy, checkout: addDays(hoy, 2),
+        guests: [{ guestID: 'g1', first: 'Marta', last: 'Ruiz', phone: '+34612345678', isMainGuest: true }],
+        reservationRooms: [{ roomID: '12', roomName: '12', roomTypeID: 'rt1', roomTypeName: 'Doble' }],
+      }),
     ];
     const before = healthSnapshot();
     const r = await findStayByPhone('612 345 678', hoy);
@@ -177,7 +231,7 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('teléfono que no coincide con nadie → null (miss, no error)', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'R2', first: 'Juan', last: 'Gómez', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34600000001' }),
+      reserva({ id: 'R2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Juan', last: 'Gómez', phone: '+34600000001', isMainGuest: true }] }),
     ];
     const before = healthSnapshot();
     const r = await findStayByPhone('+34699999999', hoy);
@@ -187,21 +241,30 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
     assert.strictEqual(after.errors, before.errors);
   });
 
-  await t('teléfono solo en guestList (includeGuestsDetails) → coincide igualmente', async () => {
+  await t('el nombre usado es el del huésped isMainGuest aunque el teléfono que coincide sea el de OTRO huésped de la reserva (y NO es simplemente el primero de la lista)', async () => {
     const hoy = diaUnico();
-    allReservations = [
-      reserva({ id: 'R3', first: 'Laura', last: 'Díaz', checkin: hoy, checkout: addDays(hoy, 1), guestListPhones: ['+34611222333'] }),
-    ];
-    const r = await findStayByPhone('+34611222333', hoy);
-    assert.ok(r);
-    assert.strictEqual(r.reservationId, 'R3');
+    const r1 = reserva({
+      id: 'MAIN-GUEST', checkin: hoy, checkout: addDays(hoy, 2),
+      // Pablo (no principal) va PRIMERO en la lista a propósito, para probar
+      // que se busca por isMainGuest y no se toma sin más list[0].
+      guests: [
+        { guestID: 'g2', first: 'Pablo', last: 'Campos', phone: '+34611000002', isMainGuest: false },
+        { guestID: 'g1', first: 'Elena', last: 'Campos', phone: '+34611000001', isMainGuest: true },
+      ],
+    });
+    allReservations = [r1];
+    const r = await findStayByPhone('+34611000002', hoy); // llama Pablo, el secundario
+    assert.ok(r, 'debía encontrar la reserva por el teléfono del huésped secundario');
+    assert.strictEqual(r.reservationId, 'MAIN-GUEST', 'sigue siendo la misma reserva');
+    assert.strictEqual(r.firstName, 'Elena', 'el nombre debe ser el del huésped isMainGuest, no el que llamó');
+    assert.strictEqual(r.fullName, 'Elena Campos');
   });
 
   await t('varias coincidencias: prioriza la que llega HOY sobre la alojada', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'ALOJADO', first: 'Pedro', last: 'Soto', checkin: addDays(hoy, -1), checkout: addDays(hoy, 5), phone: '+34622333444' }),
-      reserva({ id: 'LLEGA_HOY', first: 'Pedro', last: 'Soto', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34622333444' }),
+      reserva({ id: 'ALOJADO', checkin: addDays(hoy, -1), checkout: addDays(hoy, 5), guests: [{ guestID: 'g1', first: 'Pedro', last: 'Soto', phone: '+34622333444', isMainGuest: true }] }),
+      reserva({ id: 'LLEGA_HOY', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Pedro', last: 'Soto', phone: '+34622333444', isMainGuest: true }] }),
     ];
     const r = await findStayByPhone('+34622333444', hoy);
     assert.strictEqual(r.reservationId, 'LLEGA_HOY');
@@ -210,8 +273,8 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('varias coincidencias: prioriza la ALOJADA sobre la que llega mañana', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'LLEGA_MANANA', first: 'Ana', last: 'Cruz', checkin: addDays(hoy, 1), checkout: addDays(hoy, 5), phone: '+34633444555' }),
-      reserva({ id: 'ALOJADA2', first: 'Ana', last: 'Cruz', checkin: addDays(hoy, -1), checkout: addDays(hoy, 1), phone: '+34633444555' }),
+      reserva({ id: 'LLEGA_MANANA', checkin: addDays(hoy, 1), checkout: addDays(hoy, 5), guests: [{ guestID: 'g1', first: 'Ana', last: 'Cruz', phone: '+34633444555', isMainGuest: true }] }),
+      reserva({ id: 'ALOJADA2', checkin: addDays(hoy, -1), checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Ana', last: 'Cruz', phone: '+34633444555', isMainGuest: true }] }),
     ];
     const r = await findStayByPhone('+34633444555', hoy);
     assert.strictEqual(r.reservationId, 'ALOJADA2');
@@ -220,7 +283,7 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('alojado hoy: entrada antes de hoy y salida después de hoy → se encuentra vía la consulta de alojados', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'R4', first: 'Nadia', last: 'López', checkin: addDays(hoy, -1), checkout: addDays(hoy, 5), phone: '+34644555666' }),
+      reserva({ id: 'R4', checkin: addDays(hoy, -1), checkout: addDays(hoy, 5), guests: [{ guestID: 'g1', first: 'Nadia', last: 'López', phone: '+34644555666', isMainGuest: true }] }),
     ];
     const r = await findStayByPhone('+34644555666', hoy);
     assert.ok(r, 'debía encontrar al huésped alojado');
@@ -230,7 +293,7 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('sale HOY (checkout = hoy): NO cuenta como alojado ni como llegada — no aparece', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'SALE_HOY', first: 'Root', last: 'Out', checkin: addDays(hoy, -1), checkout: hoy, phone: '+34655666777' }),
+      reserva({ id: 'SALE_HOY', checkin: addDays(hoy, -1), checkout: hoy, guests: [{ guestID: 'g1', first: 'Root', last: 'Out', phone: '+34655666777', isMainGuest: true }] }),
     ];
     const r = await findStayByPhone('+34655666777', hoy);
     assert.strictEqual(r, null, 'un checkout de hoy significa que ya no está alojado ni llega hoy');
@@ -239,38 +302,120 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('cancelada y no-show se excluyen aunque el teléfono coincida', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'CANC', first: 'X', last: 'Y', checkin: hoy, checkout: addDays(hoy, 1), status: 'canceled', phone: '+34666777888' }),
-      reserva({ id: 'NOSHOW', first: 'X', last: 'Y', checkin: hoy, checkout: addDays(hoy, 1), status: 'no_show', phone: '+34666777888' }),
+      reserva({ id: 'CANC', checkin: hoy, checkout: addDays(hoy, 1), status: 'canceled', guests: [{ guestID: 'g1', first: 'X', last: 'Y', phone: '+34666777888', isMainGuest: true }] }),
+      reserva({ id: 'NOSHOW', checkin: hoy, checkout: addDays(hoy, 1), status: 'no_show', guests: [{ guestID: 'g1', first: 'X', last: 'Y', phone: '+34666777888', isMainGuest: true }] }),
     ];
     const r = await findStayByPhone('+34666777888', hoy);
     assert.strictEqual(r, null);
   });
 
-  await t('habitación única (sin array rooms) usa roomID/roomNumber igual que getReservationsByDate', async () => {
+  console.log('\nfindStayByPhone — habitación (prioridad de fuentes):\n');
+
+  await t('habitación a nivel de RESERVA (rooms[], simula includeAllRooms=true) tiene prioridad sobre la del huésped', async () => {
     const hoy = diaUnico();
-    const soloRoomId = reserva({ id: 'R5', first: 'Iker', last: 'Mora', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34677888999' });
-    delete soloRoomId.rooms;
-    soloRoomId.roomID = '404780-1';
-    allReservations = [soloRoomId];
+    allReservations = [
+      reserva({
+        id: 'ROOM1', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Iker', last: 'Mora', phone: '+34677888991', isMainGuest: true, roomName: 'OTRA-DEL-HUESPED' }],
+        reservationRooms: [{ roomID: '7', roomName: 'Dorm 7', roomTypeName: 'Compartida 6' }],
+      }),
+    ];
+    const r = await findStayByPhone('+34677888991', hoy);
+    assert.deepStrictEqual(r.rooms, ['Dorm 7'], 'debe usar la de la reserva (includeAllRooms), no la del huésped');
+  });
+
+  await t('varias habitaciones a nivel de reserva (grupo en 2 habitaciones) → array con las dos, sin duplicar', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({
+        id: 'ROOM2', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Sole', last: 'Vidal', phone: '+34677888992', isMainGuest: true }],
+        reservationRooms: [
+          { roomID: '1', roomName: 'Dorm 1' },
+          { roomID: '2', roomName: 'Dorm 2' },
+          { roomID: '1', roomName: 'Dorm 1' }, // sub-reserva repetida: no debe duplicar
+        ],
+      }),
+    ];
+    const r = await findStayByPhone('+34677888992', hoy);
+    assert.deepStrictEqual(r.rooms, ['Dorm 1', 'Dorm 2']);
+  });
+
+  await t('sin rooms[] a nivel de reserva (Cloudbeds no lo devolvió): usa la del huésped (roomName)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({
+        id: 'ROOM3', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Nuria', last: 'Paz', phone: '+34677888993', isMainGuest: true, roomName: 'Dorm 9' }],
+      }),
+    ];
+    const r = await findStayByPhone('+34677888993', hoy);
+    assert.deepStrictEqual(r.rooms, ['Dorm 9']);
+  });
+
+  await t('sin rooms[] a nivel de reserva ni roomName de huésped: usa assignedRoom del huésped', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({
+        id: 'ROOM4', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Bea', last: 'Solís', phone: '+34677888994', isMainGuest: true, assignedRoom: '14' }],
+      }),
+    ];
+    const r = await findStayByPhone('+34677888994', hoy);
+    assert.deepStrictEqual(r.rooms, ['14']);
+  });
+
+  await t('unassignedRooms del huésped NUNCA se usa como habitación (significa lo contrario: sin asignar)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({
+        id: 'ROOM5', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Caro', last: 'Ibáñez', phone: '+34677888995', isMainGuest: true, unassignedRooms: [{ roomTypeName: 'Compartida 6' }] }],
+      }),
+    ];
+    const r = await findStayByPhone('+34677888995', hoy);
+    assert.strictEqual(r.rooms, null, 'unassignedRooms no cuenta como habitación asignada');
+  });
+
+  await t('último recurso: roomID suelto a nivel de reserva (compatibilidad con getReservationsByDate) si no hay nada más', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({
+        id: 'R5', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Iker', last: 'Mora', phone: '+34677888999', isMainGuest: true }],
+        roomID: '404780-1',
+      }),
+    ];
     const r = await findStayByPhone('+34677888999', hoy);
     assert.deepStrictEqual(r.rooms, ['404780-1']);
   });
 
-  await t('sin ningún campo de habitación → rooms es null, no se inventa', async () => {
+  await t('sin ningún campo de habitación en ningún sitio → rooms es null, no se inventa', async () => {
     const hoy = diaUnico();
-    const sinHabitacion = reserva({ id: 'R6', first: 'Eva', last: 'Ponte', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34688999000' });
-    delete sinHabitacion.rooms;
-    allReservations = [sinHabitacion];
+    allReservations = [
+      reserva({
+        id: 'R6', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Eva', last: 'Ponte', phone: '+34688999000', isMainGuest: true }],
+      }),
+    ];
     const r = await findStayByPhone('+34688999000', hoy);
     assert.strictEqual(r.rooms, null);
   });
 
+  console.log('\nfindStayByPhone — paginado, caché y errores:\n');
+
   await t('paginado: la coincidencia está en la página 2 (101 reservas, pageSize 100)', async () => {
     const hoy = diaUnico();
     const relleno = Array.from({ length: 100 }, (_, i) =>
-      reserva({ id: `FILLER${i}`, first: 'Relleno', last: String(i), checkin: hoy, checkout: addDays(hoy, 1), phone: `+3460000${String(i).padStart(4, '0')}` })
+      reserva({
+        id: `FILLER${i}`, checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Relleno', last: String(i), phone: `+3460000${String(i).padStart(4, '0')}`, isMainGuest: true }],
+      })
     );
-    const real = reserva({ id: 'PAGINA2', first: 'Sara', last: 'Vidal', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34699111222' });
+    const real = reserva({
+      id: 'PAGINA2', checkin: hoy, checkout: addDays(hoy, 1),
+      guests: [{ guestID: 'g1', first: 'Sara', last: 'Vidal', phone: '+34699111222', isMainGuest: true }],
+    });
     allReservations = [...relleno, real];
     const r = await findStayByPhone('+34699111222', hoy);
     assert.ok(r, 'debía encontrar la reserva que solo existe en la página 2');
@@ -280,7 +425,7 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('caché de 3 minutos: una segunda búsqueda el mismo día no vuelve a llamar a Cloudbeds', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'CACHE1', first: 'Cache', last: 'Uno', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34612000111' }),
+      reserva({ id: 'CACHE1', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Cache', last: 'Uno', phone: '+34612000111', isMainGuest: true }] }),
     ];
     await findStayByPhone('+34612000111', hoy); // primera llamada: puebla la caché
     axiosCalls = 0;
@@ -295,7 +440,7 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
   await t('caché expirada (>3 min): vuelve a consultar Cloudbeds', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'CACHE2', first: 'Cache', last: 'Dos', checkin: hoy, checkout: addDays(hoy, 1), phone: '+34612000222' }),
+      reserva({ id: 'CACHE2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Cache', last: 'Dos', phone: '+34612000222', isMainGuest: true }] }),
     ];
     await findStayByPhone('+34612000222', hoy); // puebla la caché
     allReservations = []; // ya no hay nada de verdad
@@ -340,6 +485,25 @@ function reserva({ id, first, last, checkin, checkout, status = 'confirmed', roo
     assert.strictEqual(r, null);
     const after = healthSnapshot();
     assert.strictEqual(after.errors, before.errors + 1);
+  });
+
+  console.log('\nhealthSnapshot().scan:');
+
+  await t('scan refleja la última carga real: recuentos, nunca nombres ni teléfonos', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'SCAN1', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Con', last: 'Telefono', phone: '+34600111222', isMainGuest: true, roomName: 'Dorm 1' }] }),
+      reserva({ id: 'SCAN2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Sin', last: 'Telefono', isMainGuest: true }] }), // sin teléfono ni habitación
+    ];
+    await findStayByPhone('+34600111222', hoy); // fuerza una carga real (cache miss) para este "hoy" nuevo
+    const snap = healthSnapshot();
+    assert.ok(snap.scan, 'scan debía existir tras una carga real');
+    assert.strictEqual(snap.scan.reservations, 2);
+    assert.strictEqual(snap.scan.withPhone, 1);
+    assert.strictEqual(snap.scan.withRoom, 1);
+    assert.strictEqual(typeof snap.scan.at, 'string');
+    const raw = JSON.stringify(snap.scan);
+    assert.ok(!raw.includes('Con') && !raw.includes('Telefono') && !raw.includes('600111222'), 'scan nunca debe exponer nombres ni teléfonos');
   });
 
   console.log(`\n${'='.repeat(40)}\n${pasan} OK, ${fallan} fallos`);

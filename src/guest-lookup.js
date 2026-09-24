@@ -70,8 +70,21 @@ function addDaysISO(iso, n) {
 // ─── Contadores para /health (solo números y fecha — nunca datos de huésped) ─
 const counters = { matches: 0, misses: 0, errors: 0, lastAt: null };
 
+// V2a corrección NEXO (24-sep-2026): recuento de la última carga REAL de
+// candidatas (no de cada findStayByPhone, que puede servir desde caché) —
+// permite comprobar contra Cloudbeds de verdad, SIN exponer a nadie ningún
+// nombre ni teléfono, que guestPhone/rooms[] están llegando de verdad. null
+// hasta que se haga la primera carga (arranque o primera búsqueda real).
+let scan = null;
+
 function healthSnapshot() {
-  return { matches: counters.matches, misses: counters.misses, errors: counters.errors, lastAt: counters.lastAt };
+  return {
+    matches: counters.matches,
+    misses: counters.misses,
+    errors: counters.errors,
+    lastAt: counters.lastAt,
+    scan: scan ? { ...scan } : null,
+  };
 }
 
 // ─── Caché en memoria de 3 minutos para el listado de candidatas ──────────
@@ -92,6 +105,10 @@ async function fetchAllPages(params) {
     const r = await api('GET', '/getReservations', {
       ...params,
       includeGuestsDetails: true,
+      // Corrección de NEXO (24-sep-2026): el rooms[] a nivel de RESERVA solo
+      // viene si se pide explícitamente includeAllRooms=true (si no, hay que
+      // sacar la habitación del huésped — ver roomsOf/guestRoomLabels).
+      includeAllRooms: true,
       pageNumber: page,
       pageSize,
     });
@@ -134,19 +151,68 @@ async function fetchCandidates(todayISO, tomorrowISO) {
     .filter(r => !['canceled', 'no_show'].includes(r.status));
 
   cache = { key: cacheKey, at: now, reservations };
+
+  // V2a corrección NEXO: recuento de esta carga real — SOLO números, nunca
+  // nombres ni teléfonos — para poder comprobar en /health, contra Cloudbeds
+  // de verdad, que guestPhone/rooms realmente llegan (ver healthSnapshot()).
+  scan = {
+    at: new Date().toISOString(),
+    reservations: reservations.length,
+    withPhone: reservations.filter(r => reservationPhones(r).length > 0).length,
+    withRoom: reservations.filter(r => { const rm = roomsOf(r); return !!(rm && rm.length); }).length,
+  };
+
   return reservations;
 }
 
+/**
+ * Calienta la caché de candidatas al arrancar el servidor, en segundo plano.
+ * No se llama desde ningún handler HTTP: solo sirve para que /health →
+ * guestLookup.scan tenga datos cuanto antes tras un despliegue, sin esperar
+ * a la primera llamada real. Nunca lanza ni bloquea el arranque — un fallo
+ * aquí se loguea y ya está (se reintentará solo con la siguiente búsqueda
+ * real, que vuelve a intentar fetchCandidates si la caché sigue vacía).
+ */
+async function warmCache() {
+  try {
+    const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+    const tomorrowISO = addDaysISO(todayISO, 1);
+    await fetchCandidates(todayISO, tomorrowISO);
+    console.log('[guest-lookup] Caché calentada al arrancar');
+  } catch (err) {
+    console.error('[guest-lookup] Calentamiento de caché al arrancar falló (no bloquea el arranque):', err.message);
+  }
+}
+
 // ─── Extracción de campos de una reserva ──────────────────────────────────
+// Corrección de NEXO (24-sep-2026) contra la doc oficial de Cloudbeds:
+// guestList con includeGuestsDetails=true es un OBJETO indexado por guestID
+// ("a map of guest IDs to guest objects"), NO un array. La versión anterior
+// (`Array.isArray(r.guestList) ? r.guestList : []`) devolvía SIEMPRE []
+// contra la API real → nunca encontraba un teléfono. Se admiten ambas formas
+// (objeto real; array por si alguna respuesta ya lo diera así) sin romper.
 function guestListOf(r) {
-  return Array.isArray(r.guestList) ? r.guestList : [];
+  if (Array.isArray(r.guestList)) return r.guestList;
+  if (r.guestList && typeof r.guestList === 'object') return Object.values(r.guestList);
+  return [];
+}
+
+// El huésped principal de la reserva (isMainGuest), o el primero de la
+// lista si ninguno lo trae marcado — para elegir DE QUIÉN es el nombre que
+// se dice/escribe, no para decidir si hay coincidencia de teléfono (eso
+// mira a TODOS los huéspedes, sea principal o no: "si coincide el teléfono
+// de otro huésped de la misma reserva, sigue siendo esa reserva").
+function mainGuestOf(r) {
+  const list = guestListOf(r);
+  if (!list.length) return null;
+  return list.find(g => g && g.isMainGuest) || list[0];
 }
 
 // Cloudbeds no documenta de forma estable un único nombre de campo para el
-// teléfono; con includeGuestsDetails=true los datos de cada huésped viven en
-// guestList[]. Se prueban las variantes vistas en su API pública, tanto a
-// nivel de reserva como de cada huésped de la lista — si ninguna existe,
-// simplemente no hay teléfono con el que comparar (no es un error).
+// teléfono a nivel de RESERVA (de hecho, según la doc, ahí no vienen) — se
+// mantiene esa lectura por si acaso, pero la fuente real con
+// includeGuestsDetails=true es guestList[].guestPhone / guestCellPhone de
+// cada huésped.
 const PHONE_KEYS = ['guestPhone', 'guestCellPhone', 'phone', 'cellPhone'];
 function reservationPhones(r) {
   const phones = [];
@@ -159,9 +225,9 @@ function reservationPhones(r) {
 
 function firstNameOf(r) {
   if (r.guestFirstName) return r.guestFirstName;
-  const g = guestListOf(r)[0];
+  const g = mainGuestOf(r);
   if (g && g.guestFirstName) return g.guestFirstName;
-  const full = r.guestName || '';
+  const full = r.guestName || (g && g.guestName) || '';
   return full.split(' ')[0] || null;
 }
 
@@ -169,26 +235,60 @@ function fullNameOf(r) {
   if (r.guestName) return r.guestName;
   const combo = `${r.guestFirstName || ''} ${r.guestLastName || ''}`.trim();
   if (combo) return combo;
-  const g = guestListOf(r)[0];
+  const g = mainGuestOf(r);
   if (g) {
+    if (g.guestName) return g.guestName;
     const gCombo = `${g.guestFirstName || ''} ${g.guestLastName || ''}`.trim();
     if (gCombo) return gCombo;
   }
   return null;
 }
 
-// Habitación(es) asignadas, si Cloudbeds las da. Puede venir un array
-// `rooms` (varias habitaciones/camas) o, como ya asume getReservationsByDate
-// en src/cloudbeds.js, solo roomID/roomNumber sueltos. Si no hay ninguno de
-// los dos, null — nunca se inventa una habitación.
+function dedupe(arr) {
+  return Array.from(new Set(arr));
+}
+
+// Etiquetas de una lista de "habitaciones" (nivel reserva o el rooms[] de un
+// huésped): prueba roomName/roomTypeName/roomID/roomNumber en ese orden.
+function roomLabelsFromArray(arr, keys) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map(x => x && keys.map(k => x[k]).find(Boolean))
+    .filter(Boolean)
+    .map(String);
+}
+
+// Las habitaciones de un huésped concreto: su propio rooms[] si lo trae
+// (más granular), si no un campo suelto (roomName / assignedRoom /
+// roomTypeName / roomID). `unassignedRooms` NUNCA se usa aquí a propósito:
+// significa tipo de habitación pedido pero SIN habitación concreta todavía,
+// justo lo contrario de "asignada".
+function guestRoomLabels(g) {
+  if (!g) return [];
+  const fromArray = roomLabelsFromArray(g.rooms, ['roomName', 'roomTypeName', 'roomID']);
+  if (fromArray.length) return fromArray;
+  const single = g.roomName || g.assignedRoom || g.roomTypeName || g.roomID;
+  return single ? [String(single)] : [];
+}
+
+// Habitación(es) asignadas, si Cloudbeds las da. Corrección de NEXO
+// (24-sep-2026): `rooms[]` a nivel de RESERVA (roomID/roomName/roomTypeID/
+// roomTypeName/subReservationID) solo llega si la consulta pide
+// includeAllRooms=true (ver fetchAllPages) — es la fuente más fiable cuando
+// está. Si no viene, se usan las de cada huésped de guestList (su propio
+// rooms[], o si no, roomName/assignedRoom/...). Como último recurso, el
+// roomID/roomNumber suelto a nivel de reserva que ya asumía
+// getReservationsByDate en src/cloudbeds.js (listado simple, sin
+// includeAllRooms). Si ninguno trae nada, null — nunca se inventa una
+// habitación.
 function roomsOf(r) {
-  if (Array.isArray(r.rooms) && r.rooms.length) {
-    const names = r.rooms
-      .map(x => x && (x.roomName || x.roomTypeName || x.roomID || x.roomNumber))
-      .filter(Boolean)
-      .map(String);
-    if (names.length) return names;
-  }
+  const reservationLevel = roomLabelsFromArray(r.rooms, ['roomName', 'roomTypeName', 'roomID', 'roomNumber']);
+  if (reservationLevel.length) return dedupe(reservationLevel);
+
+  const guestLevel = [];
+  for (const g of guestListOf(r)) guestLevel.push(...guestRoomLabels(g));
+  if (guestLevel.length) return dedupe(guestLevel);
+
   const single = r.roomID || r.roomNumber;
   return single ? [String(single)] : null;
 }
@@ -259,4 +359,4 @@ async function findStayByPhone(phone, todayISO) {
   }
 }
 
-module.exports = { findStayByPhone, normalizePhone, phonesMatch, healthSnapshot };
+module.exports = { findStayByPhone, normalizePhone, phonesMatch, healthSnapshot, warmCache };

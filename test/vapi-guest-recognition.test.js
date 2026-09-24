@@ -8,12 +8,20 @@
 // CLOUDBEDS_REFRESH_TOKEN en el entorno (así no arrancan los timers de
 // auto-refresco de src/cloudbeds.js).
 //
-// Todas las reservas de prueba se registran UNA SOLA VEZ al principio (ver
-// allReservations más abajo) y no se tocan después: guest-lookup.js cachea
-// el listado 3 minutos, así que si cada caso reemplazara los datos se
-// arriesgaría a leer del caché de un caso anterior en vez de los suyos. El
-// caso de timeout se ejecuta el primero, con la caché todavía fría, para que
-// el retraso simulado de Cloudbeds importe de verdad.
+// Fixtures con la forma REAL de Cloudbeds (corrección de NEXO, 24-sep-2026):
+// guestList es un OBJETO indexado por guestID (no un array) y rooms[] a
+// nivel de reserva solo se simula cuando la consulta pide includeAllRooms
+// (que src/guest-lookup.js ya pide siempre).
+//
+// allReservations se rellena ANTES de requerir src/server.js: V2a calienta
+// la caché de guest-lookup en segundo plano nada más arrancar
+// (guestLookup.warmCache(), disparado dentro de app.listen), así que si el
+// fixture no estuviera listo todavía, ese calentamiento poblaría la caché de
+// HOY con una lista vacía y los tests de más abajo (dentro de la ventana de
+// 3 minutos) leerían esa caché en vez de los datos de este archivo. No se
+// toca `allReservations` después de este punto salvo en el caso de timeout,
+// que fuerza la expiración de la caché con Date.now (igual que
+// test/guest-lookup.test.js) para garantizar una consulta fresca real.
 'use strict';
 
 const assert = require('assert');
@@ -21,7 +29,7 @@ const path = require('path');
 const Module = require('module');
 
 let allReservations = [];
-let extraDelayMs = 0; // >0 solo durante el caso de timeout
+let extraDelayMs = 0; // solo durante el caso de timeout
 let telegramCalls = [];
 
 function paginateFixture(config) {
@@ -77,16 +85,6 @@ delete process.env.CLOUDBEDS_REFRESH_TOKEN; // evita el auto-refresco por timer 
 delete process.env.VAPI_SECRET_PREVIOUS;
 delete process.env.ENCARGADO_SECRET;
 
-const cloudbeds = realRequire.call(module, path.join(__dirname, '../src/cloudbeds.js'));
-const { spokenDate } = realRequire.call(module, path.join(__dirname, '../src/stay-dates.js'));
-const app = realRequire.call(module, path.join(__dirname, '../src/server.js'));
-
-let pasan = 0, fallan = 0;
-async function t(nombre, fn) {
-  try { await fn(); pasan++; console.log(`  ✓ ${nombre}`); }
-  catch (e) { fallan++; console.log(`  ✗ ${nombre}\n     ${e.stack || e.message}`); }
-}
-
 function todayMadridISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
 }
@@ -101,20 +99,58 @@ const MANANA = addDays(HOY, 1);
 const AYER = addDays(HOY, -1);
 const EN_5_DIAS = addDays(HOY, 5);
 
-function reserva({ id, first, last, checkin, checkout, status = 'confirmed', rooms, channel = 'Direct Booking', adults = 2, phone }) {
-  return {
+// Fixture con la forma REAL de Cloudbeds: guestList como OBJETO indexado por
+// guestID; rooms[] a nivel de reserva solo si se pasa reservationRooms
+// (simula que Cloudbeds honró includeAllRooms=true).
+function reserva({ id, guests, checkin, checkout, status = 'confirmed', channel = 'Direct Booking', adults = 2, reservationRooms }) {
+  const guestList = {};
+  guests.forEach((g, i) => {
+    const guestID = g.guestID || `G${i}`;
+    guestList[guestID] = {
+      guestID,
+      guestName: `${g.first} ${g.last}`,
+      guestFirstName: g.first,
+      guestLastName: g.last,
+      guestPhone: g.phone,
+      isMainGuest: !!g.isMainGuest,
+    };
+  });
+  const out = {
     reservationID: id,
-    guestFirstName: first,
-    guestLastName: last,
-    guestName: `${first} ${last}`,
     startDate: checkin,
     endDate: checkout,
     status,
     sourceName: channel,
     adults,
-    rooms: rooms ? rooms.map(r => ({ roomID: r })) : undefined,
-    guestPhone: phone,
+    guestList,
   };
+  if (reservationRooms) out.rooms = reservationRooms;
+  return out;
+}
+
+// Datos de prueba fijos para todo el archivo, preparados ANTES de requerir
+// server.js (ver cabecera) — no se tocan después salvo el caso de timeout.
+allReservations = [
+  reserva({
+    id: 'RES-ARRIVE', checkin: HOY, checkout: MANANA, channel: 'Direct Booking',
+    guests: [{ guestID: 'g1', first: 'Marta', last: 'Ruiz García', phone: '+34611222001', isMainGuest: true }],
+    reservationRooms: [{ roomID: 'DORM-7-B', roomName: 'DORM-7-B' }],
+  }),
+  reserva({
+    id: 'RES-INHOUSE', checkin: AYER, checkout: EN_5_DIAS, channel: 'Booking.com',
+    guests: [{ guestID: 'g1', first: 'Nora', last: 'Suárez Vega', phone: '+34611222002', isMainGuest: true }],
+    reservationRooms: [{ roomID: '12', roomName: '12' }, { roomID: '14', roomName: '14' }],
+  }),
+];
+
+const cloudbeds = realRequire.call(module, path.join(__dirname, '../src/cloudbeds.js'));
+const { spokenDate } = realRequire.call(module, path.join(__dirname, '../src/stay-dates.js'));
+const app = realRequire.call(module, path.join(__dirname, '../src/server.js'));
+
+let pasan = 0, fallan = 0;
+async function t(nombre, fn) {
+  try { await fn(); pasan++; console.log(`  ✓ ${nombre}`); }
+  catch (e) { fallan++; console.log(`  ✗ ${nombre}\n     ${e.stack || e.message}`); }
 }
 
 function callGetCurrentDate(phone) {
@@ -142,13 +178,6 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
   await new Promise((resolve) => setTimeout(resolve, 300));
   await cloudbeds.exchangeCode('fake-code');
 
-  // Datos de prueba fijos para todo el archivo (ver cabecera: no se tocan
-  // después de esta línea).
-  allReservations = [
-    reserva({ id: 'RES-ARRIVE', first: 'Marta', last: 'Ruiz García', checkin: HOY, checkout: MANANA, rooms: ['DORM-7-B'], channel: 'Direct Booking', phone: '+34611222001' }),
-    reserva({ id: 'RES-INHOUSE', first: 'Nora', last: 'Suárez Vega', checkin: AYER, checkout: EN_5_DIAS, rooms: ['12', '14'], channel: 'Booking.com', phone: '+34611222002' }),
-  ];
-
   console.log('\nisUrgentAccessIncident (pura, sin tocar el reloj):\n');
 
   await t('llega hoy + hora 15 → urgente', () => {
@@ -175,12 +204,19 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
 
   console.log('\nPOST /vapi/get-current-date · V2a\n');
 
-  await t('timeout de 2,5s: si Cloudbeds tarda más, responde a tiempo y SIN la línea de reserva (caché aún fría)', async () => {
+  await t('timeout de 2,5s: si Cloudbeds tarda más, responde a tiempo y SIN la línea de reserva', async () => {
+    // Fuerza una consulta fresca de verdad (cache-miss) aunque el
+    // calentamiento al arrancar ya haya poblado la caché de HOY: sin esto,
+    // el caso pasaría por una razón equivocada (respuesta instantánea desde
+    // caché, sin llegar a ejercitar el Promise.race de 2,5s).
+    const realNow = Date.now;
+    Date.now = () => realNow() + 3 * 60 * 1000 + 1000;
     extraDelayMs = 3500;
-    const started = Date.now();
+    const started = Date.now(); // con el reloj ya desplazado, solo para medir el propio caso
     const r = await callGetCurrentDate('+34 611 222 001'); // mismo huésped que sí existe (Marta)
     const elapsed = Date.now() - started;
     extraDelayMs = 0;
+    Date.now = realNow;
     assert.strictEqual(r.status, 200);
     const body = await r.json();
     assert.ok(elapsed < 2900, `debía responder en menos de ~2.9s (tardó ${elapsed}ms)`);
@@ -252,11 +288,7 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     assert.ok(texto.includes('Reserva: Nora Suárez Vega'));
   });
 
-  await t('acceso, llegada de HOY, sin forma de saber la hora real → no se afirma urgencia por esta vía (ya cubierto por el helper puro de arriba)', async () => {
-    // La rama "llega hoy + hora ≥ 15" depende del reloj real del proceso, así
-    // que aquí solo se confirma que la reserva SÍ se encuentra y se añade
-    // (Marta llega hoy) — el corte exacto de las 14:59/15:00 ya se prueba de
-    // forma determinista y sin tocar el reloj en el bloque isUrgentAccessIncident.
+  await t('acceso, llegada de HOY: la reserva se encuentra y se añade (el corte exacto de las 14:59/15:00 ya se prueba de forma determinista arriba, sin tocar el reloj)', async () => {
     telegramCalls.length = 0;
     await callReportIncident({ phone: '+34611222001', category: 'acceso', description: 'no encuentra el cajetín' });
     const texto = telegramCalls[0].text;
@@ -291,6 +323,19 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     assert.ok(body.guestLookup.matches >= 1, 'ya hubo coincidencias en los casos anteriores');
     assert.ok(body.guestLookup.misses >= 1, 'ya hubo misses en los casos anteriores');
     assert.ok(typeof body.guestLookup.lastAt === 'string');
+  });
+
+  await t('/health → guestLookup.scan refleja el calentamiento al arrancar (2 reservas, ambas con teléfono y habitación) — solo números y fecha, nunca nombres', async () => {
+    const r = await fetch(`${BASE}/health`);
+    const body = await r.json();
+    const scan = body.guestLookup.scan;
+    assert.ok(scan, 'guestLookup.scan debía existir (calentamiento al arrancar o alguna búsqueda real ya lo pobló)');
+    assert.strictEqual(scan.reservations, 2);
+    assert.strictEqual(scan.withPhone, 2);
+    assert.strictEqual(scan.withRoom, 2);
+    assert.strictEqual(typeof scan.at, 'string');
+    const raw = JSON.stringify(scan);
+    assert.ok(!raw.includes('Marta') && !raw.includes('Nora') && !raw.includes('611222'), 'scan nunca debe exponer nombres ni teléfonos');
   });
 
   console.log(`\n${'='.repeat(40)}\n${pasan} OK, ${fallan} fallos`);

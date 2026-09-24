@@ -1137,6 +1137,13 @@ OAuth:
   GET  /health                               ← estado del servidor
 `);
 
+  // V2a corrección NEXO (24-sep-2026): calienta la caché de guest-lookup en
+  // segundo plano nada más arrancar, para que /health → guestLookup.scan
+  // tenga datos cuanto antes. Fire-and-forget a propósito: no se espera
+  // (await) aquí — un Cloudbeds lento o caído no debe retrasar ni romper el
+  // arranque del servidor (warmCache() ya se traga sus propios errores).
+  guestLookup.warmCache();
+
   // Avisar si falta configuración crítica
   if (!process.env.CLOUDBEDS_CLIENT_ID) console.warn('⚠️  CLOUDBEDS_CLIENT_ID no configurado');
   if (!process.env.CLOUDBEDS_REFRESH_TOKEN) console.warn('⚠️  CLOUDBEDS_REFRESH_TOKEN no configurado — autoriza con: curl -H "x-vapi-secret: $VAPI_SECRET" .../auth/cloudbeds');
