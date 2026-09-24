@@ -12,7 +12,7 @@ LLM gpt-4o-mini · STT Deepgram nova-3 (es) · TTS ElevenLabs turbo v2.5 · solo
 |---|---|---|---|---|
 | H1 | ALTA | Error de la API de Cloudbeds se confunde con "sin disponibilidad": el huésped oye que no hay sitio cuando en realidad falló el token o la API, y nadie se entera — ✅ V0 (23-sep-2026) | `src/cloudbeds.js:148-151`, `src/server.js:144-153` | S |
 | H2 | ALTA | El parámetro `preference` (privada / compartida / cualquiera) puede no estar en el schema real de la tool en Vapi; el prompt ya lo usa. Si falta, siempre cae en "cualquiera" | `CLAUDE.md:89`, `vapi/system-prompt.md:117-134`, `src/server.js:123` | S |
-| H3 | ALTA | El panel admin recibe `VAPI_API_KEY` y `VAPI_SECRET` en claro y llama a la API de Vapi desde el navegador | `src/server.js:308-315`, `public/index.html:311-360` | M |
+| H3 | ALTA | El panel admin recibe `VAPI_API_KEY` y `VAPI_SECRET` en claro y llama a la API de Vapi desde el navegador — ✅ V1 (23-sep-2026) | `src/server.js:308-315`, `public/index.html:311-360` | M |
 | H4 | ALTA | La `VAPI_API_KEY` compartida por error sigue sin rotar | `CLAUDE.md:88`, `memory.md` | S |
 | H5 | MEDIA | Sin inglés: el prompt fuerza español aunque el que llame sea extranjero | `vapi/system-prompt.md:1-5` | M |
 | H6 | MEDIA | El endpoint que recibe el informe de fin de llamada no valida secreto: cualquiera puede inyectar informes falsos y llenar Telegram de avisos "LLAMAR" — ✅ V0 (23-sep-2026) | `src/server.js:363-469` | S |
@@ -69,3 +69,4 @@ LLM gpt-4o-mini · STT Deepgram nova-3 (es) · TTS ElevenLabs turbo v2.5 · solo
 - **23-sep-2026: plan aprobado por Luis** (orden V0 → V4). Rotación de key: la hace Luis. Inglés: aprobado con el criterio de arriba.
 - **V0 DESPLEGADA el 23-sep-2026 a las 20:29** (merge `e5778e0` en main). Verificado en producción: `/health` devuelve `status ok`, `cloudbeds ok` (comprobación real con caché de 5 min), `vapiSecretConfigured true`, `telegram configured`. `npm test`: 8 archivos, todos en verde.
 - Condición del auditor (secreto de `get_weather`): Luis confirmó en el dashboard que el tool tiene URL pero no secreto, y el assistant tampoco tiene `server.secret`. Por eso `get_weather` y el informe de fin de llamada van en modo **warn** (`VAPI_LEGACY_AUTH`, alias `VAPI_END_OF_CALL_AUTH`). Pendiente de Luis: pegar el valor de `VAPI_SECRET` en Vapi → Tools/get_weather/Server/Secret y en Assistant/Server/Secret; después pasar a `strict`. Cada push a main redespliega el bot: agrupar cambios de docs con la siguiente tanda de código.
+- V1 construida y auditada el 23-sep-2026, pendiente de merge con Luis.

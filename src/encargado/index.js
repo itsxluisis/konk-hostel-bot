@@ -15,6 +15,14 @@ const escucha = require('./escucha');
 
 function montar(app) {
   try {
+    // V1 (Encargado desacoplado): el fallback a VAPI_SECRET en latidos.js se
+    // mantiene por compatibilidad, pero si se está usando (no hay
+    // ENCARGADO_SECRET propio) se avisa en el arranque. No cambia el
+    // comportamiento de los agentes del Mac, solo hace visible la mezcla de
+    // secretos — ver /health → encargadoSecretDedicated.
+    if (!process.env.ENCARGADO_SECRET) {
+      console.warn('[Encargado] ENCARGADO_SECRET no configurado — usando VAPI_SECRET como fallback de compatibilidad. Recomendado: definir un ENCARGADO_SECRET propio, distinto de VAPI_SECRET.');
+    }
     app.use('/encargado', router);
     vigilancia.arrancar();
     agenda.arrancar();

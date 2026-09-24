@@ -230,7 +230,6 @@ tr.cl:hover td{background:rgba(255,255,255,.02);cursor:pointer}
 
 <script>
 var WH = window.location.origin;
-var VA = 'https://api.vapi.ai';
 var sess = null;
 var currentTab = 'dashboard';
 var urgs = [];
@@ -316,7 +315,9 @@ function doLogin() {
   .then(function(r) { return r.json(); })
   .then(function(d) {
     if (!d.ok) throw new Error('bad');
-    sess = { vk: d.vapiKey, ws: d.webhookSecret };
+    // H3 (V1): el backend ya NO manda VAPI_API_KEY ni VAPI_SECRET al navegador.
+    // Solo un token de sesión opaco (x-admin-token) para hablar con /admin/*.
+    sess = { token: d.token };
     document.getElementById('login').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     init();
@@ -327,45 +328,23 @@ function doLogin() {
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
-function vapiGet(path) {
-  return fetch(VA + path, {
-    headers: { 'Authorization': 'Bearer ' + sess.vk, 'Content-Type': 'application/json' }
-  }).then(function(r) {
+// Todo pasa por el propio backend (WH): ni la API key de Vapi ni el webhook
+// secret llegan nunca al navegador. Las llamadas a api.vapi.ai las hace el
+// servidor por nosotros (proxy en /admin/vapi/*, ver src/vapi-proxy.js).
+function hookRequest(method, path, body) {
+  var opts = {
+    method: method,
+    headers: { 'x-admin-token': (sess && sess.token) || '', 'Content-Type': 'application/json' }
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  return fetch(WH + path, opts).then(function(r) {
     if (!r.ok) throw new Error(r.status);
     return r.json();
   });
 }
-
-function vapiPatch(path, body) {
-  return fetch(VA + path, {
-    method: 'PATCH',
-    headers: { 'Authorization': 'Bearer ' + sess.vk, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  }).then(function(r) {
-    if (!r.ok) throw new Error(r.status);
-    return r.json();
-  });
-}
-
-function hookGet(path) {
-  return fetch(WH + path, {
-    headers: { 'x-vapi-secret': sess.ws, 'Content-Type': 'application/json' }
-  }).then(function(r) {
-    if (!r.ok) throw new Error(r.status);
-    return r.json();
-  });
-}
-
-function hookPost(path, body) {
-  return fetch(WH + path, {
-    method: 'POST',
-    headers: { 'x-vapi-secret': sess.ws, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  }).then(function(r) {
-    if (!r.ok) throw new Error(r.status);
-    return r.json();
-  });
-}
+function hookGet(path) { return hookRequest('GET', path); }
+function hookPost(path, body) { return hookRequest('POST', path, body || {}); }
+function hookPatch(path, body) { return hookRequest('PATCH', path, body || {}); }
 
 // ── TOAST / DETAIL ─────────────────────────────────────────────────────────────
 function toast(msg, type) {
@@ -406,10 +385,19 @@ function refreshStatus() {
 }
 
 function logout() {
+  var tok = sess && sess.token;
   sess = null;
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'flex';
   document.getElementById('lp').value = '';
+  if (tok) {
+    // Best-effort: invalida la sesión en el servidor. Si falla (red caída,
+    // ya expiró...) da igual, el navegador ya la ha olvidado.
+    fetch(WH + '/admin/logout', {
+      method: 'POST',
+      headers: { 'x-admin-token': tok, 'Content-Type': 'application/json' }
+    }).catch(function() {});
+  }
 }
 
 // ── NAV ────────────────────────────────────────────────────────────────────────
@@ -464,7 +452,7 @@ function renderDashboard() {
 
   Promise.all([
     fetch(WH + '/health').then(function(r) { return r.json(); }).catch(function() { return {}; }),
-    vapiGet('/call?limit=100').catch(function() { return []; }),
+    hookGet('/admin/vapi/calls?limit=100').catch(function() { return []; }),
     hookGet('/admin/reservations-today').catch(function() { return { today: [], tomorrow: [] }; })
   ]).then(function(results) {
     var h = results[0];
@@ -560,7 +548,7 @@ function renderReservations() {
 function renderAssistant() {
   var c = document.getElementById('content');
   c.innerHTML = '<div class="empty"><span class="spin"></span></div>';
-  vapiGet('/assistant?limit=10').then(function(list) {
+  hookGet('/admin/vapi/assistants?limit=10').then(function(list) {
     asstData = list && list[0] ? list[0] : null;
     if (!asstData) { c.innerHTML = '<div class="empty">Sin asistente</div>'; return; }
     var prompt = '';
@@ -576,7 +564,7 @@ function renderAssistant() {
 }
 function saveAsst() {
   if (!asstData) return;
-  vapiPatch('/assistant/' + asstData.id, {
+  hookPatch('/admin/vapi/assistants/' + asstData.id, {
     name: document.getElementById('an').value,
     firstMessage: document.getElementById('af').value,
     model: Object.assign({}, asstData.model, {
@@ -643,7 +631,7 @@ function roomTypesDump() {
 function renderCalls() {
   var c = document.getElementById('content');
   c.innerHTML = '<div class="empty"><span class="spin"></span></div>';
-  vapiGet('/call?limit=50').then(function(list) {
+  hookGet('/admin/vapi/calls?limit=50').then(function(list) {
     callsList = list || [];
     function fmt(iso) { return iso ? new Date(iso).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'; }
     function dur(s) { return s ? Math.floor(s / 60) + 'm ' + (Math.round(s) % 60) + 's' : '—'; }
@@ -659,7 +647,7 @@ function renderCalls() {
 }
 function openCall(id) {
   openDP('Llamada', id.slice(0, 8) + '...', '<div class="empty"><span class="spin"></span></div>');
-  vapiGet('/call/' + id).then(function(cl) {
+  hookGet('/admin/vapi/calls/' + id).then(function(cl) {
     var tx = cl.transcript || '';
     var uw = ['incendio', 'accidente', 'emergencia', 'médico', 'herido', 'robo', 'no puedo entrar', 'atrapado'];
     var det = uw.find(function(w) { return tx.toLowerCase().indexOf(w) !== -1; });
@@ -819,7 +807,7 @@ function renderSettings() {
   var c = document.getElementById('content');
   var cost = localStorage.getItem('kvcost') || '0.11';
 
-  c.innerHTML = '<div class="grid g2"><div class="card"><div class="ctitle">Seguridad</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.8;margin-bottom:12px">Usuario y contraseña configurados en EasyPanel como ADMIN_USER y ADMIN_PASSWORD.<br>Webhook secret: VAPI_SECRET en EasyPanel.</div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Regenerar API key Vapi</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">1. vapi.ai → Account → API Keys → revocar y crear nueva<br>2. gh secret set VAPI_API_KEY --repo itsxluisis/konk-hostel-bot<br>3. Actualizar en EasyPanel env vars</div></div><div class="card"><div class="ctitle">Coste por minuto</div><div class="field"><label>Tarifa actual (€/min)</label><input type="number" id="vcost" value="' + cost + '" step="0.001" min="0"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:4px">Actualiza si cambias de plan en Vapi</div><button class="btn" style="margin-top:6px" id="savevcostbtn">Guardar</button></div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Cloudbeds OAuth</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">Para reautorizar: GET /auth/cloudbeds con cabecera x-vapi-secret (curl -H "x-vapi-secret: TU_SECRETO" .../auth/cloudbeds) devuelve la URL de Cloudbeds; ábrela en el navegador.<br>Callback: /auth/cloudbeds/callback<br>Luego copiar CLOUDBEDS_REFRESH_TOKEN a EasyPanel.</div></div></div>';
+  c.innerHTML = '<div class="grid g2"><div class="card"><div class="ctitle">Seguridad</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.8;margin-bottom:12px">Usuario y contraseña configurados en EasyPanel como ADMIN_USER y ADMIN_PASSWORD.<br>El panel ya no conoce VAPI_API_KEY ni VAPI_SECRET: todas las llamadas a Vapi las hace el backend (proxy /admin/vapi/*).</div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Regenerar API key Vapi</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">1. vapi.ai → Account → API Keys → revocar y crear nueva<br>2. gh secret set VAPI_API_KEY --repo itsxluisis/konk-hostel-bot<br>3. Actualizar en EasyPanel env vars</div></div><div class="card"><div class="ctitle">Coste por minuto</div><div class="field"><label>Tarifa actual (€/min)</label><input type="number" id="vcost" value="' + cost + '" step="0.001" min="0"><div style="font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:4px">Actualiza si cambias de plan en Vapi</div><button class="btn" style="margin-top:6px" id="savevcostbtn">Guardar</button></div><div class="divider"></div><div class="ctitle" style="margin-bottom:8px">Cloudbeds OAuth</div><div style="font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.7">Para reautorizar: GET /auth/cloudbeds con cabecera x-vapi-secret (curl -H "x-vapi-secret: TU_SECRETO" .../auth/cloudbeds) devuelve la URL de Cloudbeds; ábrela en el navegador.<br>Callback: /auth/cloudbeds/callback<br>Luego copiar CLOUDBEDS_REFRESH_TOKEN a EasyPanel.</div></div></div>';
 
   document.getElementById('savevcostbtn').addEventListener('click', function() {
     localStorage.setItem('kvcost', document.getElementById('vcost').value);

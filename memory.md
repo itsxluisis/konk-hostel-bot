@@ -61,3 +61,12 @@ A React-based single-HTML-file admin panel was built, connecting to Vapi via API
 - **Trampa nueva:** `get_weather` se creó a mano en el dashboard sin secreto; los JSON en `vapi/tools/` son documentación, `sync-vapi.yml` solo sincroniza el prompt.
 - **Pendiente de Luis:** pegar el valor de `VAPI_SECRET` en Vapi en dos sitios (Tools/get_weather/Server/Secret y Assistant/Server/Secret); después rotar `VAPI_API_KEY`.
 - **Regla operativa:** cada push a main redespliega el bot; no pushear solo docs.
+
+## 23-sep-2026 — Tanda V1 (panel sin secretos + rotación sin cortes)
+
+- **Qué cambia:** el navegador ya no recibe `VAPI_API_KEY` ni `VAPI_SECRET` — `/admin/login` solo devuelve un token de sesión (12h, en memoria). `adminAuth` nuevo (sesión `x-admin-token` o Basic `ADMIN_USER`/`ADMIN_PASSWORD`, nunca query string) protege `/admin/*`. `vapiAuth`/`legacyAuthOk` admiten `VAPI_SECRET_PREVIOUS` durante una rotación. Rate-limit compartido (10 fallos/15min por IP) entre `/admin/login` y cualquier Basic auth en `/admin/*`/`/vapi/*`; `app.set('trust proxy', 1)` para que `req.ip` sea la IP real del cliente detrás de Traefik/EasyPanel, no la del proxy. Comparaciones de secretos y contraseña en tiempo constante (`crypto.timingSafeEqual`).
+- **4 rutas proxy nuevas** (la API key de Vapi vive solo en el servidor, allow-list explícita en `src/vapi-proxy.js`): `GET /admin/vapi/calls`, `GET /admin/vapi/calls/:id`, `GET /admin/vapi/assistants`, `PATCH /admin/vapi/assistants/:id`.
+- **Sesión de 12h en memoria:** se pierde en cada redeploy — hay que volver a hacer login en el panel después de cada despliegue (igual que con cualquier redeploy de EasyPanel).
+- **Rotar `VAPI_SECRET` sin cortes (5 pasos):** 1) desplegar esta versión; 2) en EasyPanel poner `VAPI_SECRET_PREVIOUS`=secreto viejo y `VAPI_SECRET`=nuevo; 3) actualizar el secreto en Vapi (Tools/get_weather/Server/Secret y Assistant/Server/Secret) al nuevo; 4) llamada de prueba real; 5) borrar `VAPI_SECRET_PREVIOUS` de EasyPanel.
+- **`ENCARGADO_SECRET` antes de rotar:** fijar uno propio (distinto de `VAPI_SECRET`) antes de cualquier rotación — mientras no exista, `latidos.js` cae en `VAPI_SECRET`/`VAPI_SECRET_PREVIOUS` por compatibilidad (ver `docs/encargado.md`), y sin él los agentes del Mac dependen de que la rotación de arriba se haga bien.
+- **Estado:** rama `v1-panel-sin-secretos`, auditada y con condiciones cerradas el 23-sep-2026 (`docs/plan-mejora-voz-sep-2026.md`), pendiente de merge con Luis. `npm test` en verde (144 comprobaciones).
