@@ -296,6 +296,17 @@ var ROADMAP = [
   }
 ];
 
+// ── ESCAPE HTML ────────────────────────────────────────────────────────────────
+// Todo lo que venga de Vapi o Cloudbeds (nombre/prompt del asistente,
+// transcripciones, nombre/teléfono de huésped, estado de llamada o reserva…)
+// se interpola en innerHTML: sin escapar, un huésped o una respuesta de la
+// API con '<'/'"'/etc. podría inyectar HTML/JS en el panel del admin.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
 // ── LOGIN ──────────────────────────────────────────────────────────────────────
 document.getElementById('loginbtn').addEventListener('click', doLogin);
 document.getElementById('lp').addEventListener('keydown', function(e) {
@@ -494,7 +505,7 @@ function renderDashboard() {
       ? '<div class="empty" style="padding:16px">Sin reservas hoy</div>'
       : rs.slice(0, 3).map(function(r) {
           var cls = r.status === 'checked_in' ? 'tg' : r.status === 'confirmed' ? 'tb' : 'tgr';
-          return '<div class="rc"><div class="rnum">' + (r.roomNumber || '?') + '</div><div class="rinfo"><div class="rname">' + r.guestName + '</div><div class="rmeta">' + r.checkin + ' → ' + r.checkout + '</div></div><span class="tag ' + cls + '">' + r.status + '</span></div>';
+          return '<div class="rc"><div class="rnum">' + esc(r.roomNumber || '?') + '</div><div class="rinfo"><div class="rname">' + esc(r.guestName) + '</div><div class="rmeta">' + esc(r.checkin) + ' → ' + esc(r.checkout) + '</div></div><span class="tag ' + cls + '">' + esc(r.status) + '</span></div>';
         }).join('');
 
     var pending = ROADMAP.filter(function(r) { return r.status === 'pendiente' || r.status === 'config'; });
@@ -533,7 +544,7 @@ function renderReservations() {
       if (arr.length === 0) return '<div class="empty">Sin reservas</div>';
       var rows = arr.map(function(r) {
         var cls = r.status === 'checked_in' ? 'tg' : r.status === 'confirmed' ? 'tb' : 'tgr';
-        return '<tr><td style="font-family:var(--mono);font-weight:600">' + (r.roomNumber || '?') + '</td><td>' + r.guestName + '</td><td style="font-family:var(--mono);font-size:11px">' + r.checkin + '</td><td style="font-family:var(--mono);font-size:11px">' + r.checkout + '</td><td>' + r.adults + '</td><td><span class="tag ' + cls + '">' + r.status + '</span></td></tr>';
+        return '<tr><td style="font-family:var(--mono);font-weight:600">' + esc(r.roomNumber || '?') + '</td><td>' + esc(r.guestName) + '</td><td style="font-family:var(--mono);font-size:11px">' + esc(r.checkin) + '</td><td style="font-family:var(--mono);font-size:11px">' + esc(r.checkout) + '</td><td>' + esc(r.adults) + '</td><td><span class="tag ' + cls + '">' + esc(r.status) + '</span></td></tr>';
       }).join('');
       return '<div style="border:1px solid var(--b1);border-radius:var(--r);overflow:hidden"><table><thead><tr><th>Hab.</th><th>Huésped</th><th>Check-in</th><th>Check-out</th><th>Pax</th><th>Estado</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
     }
@@ -559,18 +570,20 @@ function renderAssistant() {
     var words = prompt.split(/\s+/).filter(Boolean).length;
     document.getElementById('tactions').innerHTML = '<button class="btn btn-acc" id="saveasstbtn">↑ Guardar en Vapi</button>';
     document.getElementById('saveasstbtn').addEventListener('click', saveAsst);
-    c.innerHTML = '<div class="card" style="margin-bottom:10px"><div class="ctitle">Identidad</div><div class="row"><div class="field"><label>Nombre</label><input id="an" value="' + (asstData.name || '') + '"></div><div class="field"><label>Modelo</label><input id="am" value="' + (asstData.model ? asstData.model.model || '' : '') + '"></div></div><div class="field"><label>Bienvenida</label><input id="af" value="' + ((asstData.firstMessage || '').replace(/"/g, '&quot;')) + '"></div></div><div class="card"><div class="ctitle" style="margin-bottom:8px">System prompt <span style="color:var(--t3);font-weight:400">(' + words + ' palabras)</span></div><div style="font-family:var(--mono);font-size:10px;color:var(--yellow);padding:6px 8px;background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.2);border-radius:var(--r);margin-bottom:8px">⚠ Los cambios aquí van directo a Vapi. Para que persistan en el repo, edita también vapi/system-prompt.md y haz git push.</div><textarea id="ap" rows="20">' + prompt + '</textarea></div>';
+    c.innerHTML = '<div class="card" style="margin-bottom:10px"><div class="ctitle">Identidad</div><div class="row"><div class="field"><label>Nombre</label><input id="an" value="' + esc(asstData.name || '') + '"></div><div class="field"><label>Modelo</label><input id="am" value="' + esc(asstData.model ? asstData.model.model || '' : '') + '"></div></div><div class="field"><label>Bienvenida</label><input id="af" value="' + esc(asstData.firstMessage || '') + '"></div></div><div class="card"><div class="ctitle" style="margin-bottom:8px">System prompt <span style="color:var(--t3);font-weight:400">(' + words + ' palabras)</span></div><div style="font-family:var(--mono);font-size:10px;color:var(--yellow);padding:6px 8px;background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.2);border-radius:var(--r);margin-bottom:8px">⚠ Los cambios aquí van directo a Vapi. Para que persistan en el repo, edita también vapi/system-prompt.md y haz git push.</div><textarea id="ap" rows="20">' + esc(prompt) + '</textarea></div>';
   }).catch(function(e) { c.innerHTML = '<div class="empty">Error: ' + e.message + '</div>'; });
 }
 function saveAsst() {
   if (!asstData) return;
+  // V1.1: el navegador ya no manda `model` (ni sus tools/secretos, que ni
+  // siquiera conoce tras la redacción del GET) — solo estos 4 campos de
+  // texto. El servidor construye el model real a partir del assistant real
+  // (ver PATCH /admin/vapi/assistants/:id en src/server.js).
   hookPatch('/admin/vapi/assistants/' + asstData.id, {
     name: document.getElementById('an').value,
     firstMessage: document.getElementById('af').value,
-    model: Object.assign({}, asstData.model, {
-      model: document.getElementById('am').value,
-      messages: [{ role: 'system', content: document.getElementById('ap').value }]
-    })
+    modelName: document.getElementById('am').value,
+    systemPrompt: document.getElementById('ap').value
   }).then(function() { toast('Guardado en Vapi'); })
     .catch(function(e) { toast('Error: ' + e.message, 'err'); });
 }
@@ -637,7 +650,7 @@ function renderCalls() {
     function dur(s) { return s ? Math.floor(s / 60) + 'm ' + (Math.round(s) % 60) + 's' : '—'; }
     var rows = callsList.map(function(cl) {
       var cls2 = cl.status === 'ended' ? 'tg' : cl.status === 'in-progress' ? 'ty' : 'tgr';
-      return '<tr class="cl" data-id="' + cl.id + '"><td style="font-family:var(--mono);font-size:11px">' + fmt(cl.createdAt) + '</td><td style="font-family:var(--mono);font-size:11px">' + (cl.customer && cl.customer.number ? cl.customer.number : 'test') + '</td><td style="font-family:var(--mono);font-size:11px">' + dur(cl.duration) + '</td><td style="font-family:var(--mono);font-size:11px">' + (cl.cost ? '€' + cl.cost.toFixed(3) : '—') + '</td><td><span class="tag ' + cls2 + '">' + (cl.status || '—') + '</span></td></tr>';
+      return '<tr class="cl" data-id="' + esc(cl.id) + '"><td style="font-family:var(--mono);font-size:11px">' + fmt(cl.createdAt) + '</td><td style="font-family:var(--mono);font-size:11px">' + esc(cl.customer && cl.customer.number ? cl.customer.number : 'test') + '</td><td style="font-family:var(--mono);font-size:11px">' + dur(cl.duration) + '</td><td style="font-family:var(--mono);font-size:11px">' + (cl.cost ? '€' + cl.cost.toFixed(3) : '—') + '</td><td><span class="tag ' + cls2 + '">' + esc(cl.status || '—') + '</span></td></tr>';
     }).join('');
     c.innerHTML = '<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>Fecha</th><th>Número</th><th>Duración</th><th>Coste</th><th>Estado</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5"><div class="empty">Sin llamadas</div></td></tr>') + '</tbody></table></div>';
     c.querySelectorAll('tr.cl').forEach(function(row) {
@@ -657,7 +670,7 @@ function openCall(id) {
     }
     var txHtml = tx ? tx.split('\n').filter(Boolean).map(function(l) {
       var isBot = l.indexOf('AI:') === 0 || l.indexOf('assistant:') === 0;
-      return '<div class="' + (isBot ? 'tbot' : 'tu') + '">' + l + '</div>';
+      return '<div class="' + (isBot ? 'tbot' : 'tu') + '">' + esc(l) + '</div>';
     }).join('') : '<span style="color:var(--t3)">Sin transcripción</span>';
     var durStr = cl.duration ? Math.floor(cl.duration / 60) + 'm ' + (Math.round(cl.duration) % 60) + 's' : '—';
     var detHtml = det ? '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);padding:7px 10px;font-family:var(--mono);font-size:10px;color:var(--red);margin-bottom:10px">⚠ Urgencia: "' + det + '"</div>' : '';
@@ -676,11 +689,11 @@ function renderUrgencies() {
   var resolved = urgs.filter(function(u) { return u.status === 'resolved'; });
 
   function card(u) {
-    var escBtn = u.status !== 'escalated' ? '<button class="btn btn-sm" data-id="' + u.id + '" data-action="escalated">Escalar</button>' : '';
-    var resBtn = '<button class="btn btn-sm btn-red" data-id="' + u.id + '" data-action="resolved">Resolver</button>';
-    var viewBtn = u.transcript ? '<button class="btn btn-sm" data-id="' + u.id + '" data-action="view">Ver</button>' : '';
+    var escBtn = u.status !== 'escalated' ? '<button class="btn btn-sm" data-id="' + esc(u.id) + '" data-action="escalated">Escalar</button>' : '';
+    var resBtn = '<button class="btn btn-sm btn-red" data-id="' + esc(u.id) + '" data-action="resolved">Resolver</button>';
+    var viewBtn = u.transcript ? '<button class="btn btn-sm" data-id="' + esc(u.id) + '" data-action="view">Ver</button>' : '';
     var ts = u.ts ? new Date(u.ts).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-    return '<div class="kcard" draggable="true" data-id="' + u.id + '"><div class="kcard-title">' + (u.reason || 'Incidencia') + '</div><div class="kcard-meta">' + (u.guest || '—') + ' · ' + ts + '</div><div class="kcard-actions">' + escBtn + resBtn + viewBtn + '</div></div>';
+    return '<div class="kcard" draggable="true" data-id="' + esc(u.id) + '"><div class="kcard-title">' + esc(u.reason || 'Incidencia') + '</div><div class="kcard-meta">' + esc(u.guest || '—') + ' · ' + ts + '</div><div class="kcard-actions">' + escBtn + resBtn + viewBtn + '</div></div>';
   }
 
   function col(title, color, items, id) {
@@ -734,10 +747,10 @@ function openUrg(id) {
   if (!u) return;
   var txHtml = u.transcript ? u.transcript.split('\n').filter(Boolean).map(function(l) {
     var isBot = l.indexOf('AI:') === 0 || l.indexOf('assistant:') === 0;
-    return '<div class="' + (isBot ? 'tbot' : 'tu') + '">' + l + '</div>';
+    return '<div class="' + (isBot ? 'tbot' : 'tu') + '">' + esc(l) + '</div>';
   }).join('') : '<span style="color:var(--t3)">Sin transcripción</span>';
   var ts = u.ts ? new Date(u.ts).toLocaleString('es-ES') : '—';
-  openDP('Urgencia', u.reason || '', '<div class="field"><label>Huésped</label><div style="padding:4px 0">' + (u.guest || '—') + '</div></div><div class="field"><label>Fecha</label><div style="font-family:var(--mono);font-size:11px;padding:4px 0">' + ts + '</div></div><label>Transcripción</label><div class="txbox">' + txHtml + '</div>');
+  openDP('Urgencia', u.reason || '', '<div class="field"><label>Huésped</label><div style="padding:4px 0">' + esc(u.guest || '—') + '</div></div><div class="field"><label>Fecha</label><div style="font-family:var(--mono);font-size:11px;padding:4px 0">' + ts + '</div></div><label>Transcripción</label><div class="txbox">' + txHtml + '</div>');
 }
 
 function openHistory() {

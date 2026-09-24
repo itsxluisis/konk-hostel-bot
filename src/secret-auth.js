@@ -29,17 +29,31 @@ function timingSafeEqualStr(a, b) {
 }
 
 /**
+ * Como matchesConfiguredSecret, pero en vez de un boolean dice CUÁL de los
+ * dos secretos ha coincidido: 'current' | 'previous' | null. Pensada para
+ * los contadores de verificación de rotación de /health (V1.1 —
+ * docs/plan-mejora-voz-sep-2026.md): nunca decide autorización por sí
+ * misma (eso lo sigue haciendo matchesConfiguredSecret, más abajo, que
+ * delega en esta función y por tanto se comporta exactamente igual que
+ * antes). Nunca compara contra valores vacíos — un `current`/`previous`
+ * vacío o undefined jamás produce un "match".
+ */
+function matchedSecretKind(provided, current, previous) {
+  const p = normalizeBearer(provided);
+  if (!p) return null;
+  if (current && timingSafeEqualStr(p, current)) return 'current';
+  if (previous && timingSafeEqualStr(p, previous)) return 'previous';
+  return null;
+}
+
+/**
  * true si `provided` (con o sin prefijo Bearer) coincide, en tiempo
  * constante, con `current` o, si está definido, con `previous`. Nunca
  * compara contra valores vacíos — un `current`/`previous` vacío o
  * undefined jamás produce un "match".
  */
 function matchesConfiguredSecret(provided, current, previous) {
-  const p = normalizeBearer(provided);
-  if (!p) return false;
-  if (current && timingSafeEqualStr(p, current)) return true;
-  if (previous && timingSafeEqualStr(p, previous)) return true;
-  return false;
+  return matchedSecretKind(provided, current, previous) !== null;
 }
 
-module.exports = { normalizeBearer, matchesConfiguredSecret, timingSafeEqualStr };
+module.exports = { normalizeBearer, matchesConfiguredSecret, matchedSecretKind, timingSafeEqualStr };

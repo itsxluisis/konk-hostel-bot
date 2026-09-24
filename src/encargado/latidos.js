@@ -13,7 +13,8 @@ const agenda = require('./agenda');
 const escucha = require('./escucha');
 const cerebro = require('./cerebro');
 const { send } = require('../telegram');
-const { matchesConfiguredSecret, timingSafeEqualStr } = require('../secret-auth');
+const { matchedSecretKind, timingSafeEqualStr } = require('../secret-auth');
+const secretMatchCounters = require('../secret-match-counters');
 
 const router = express.Router();
 
@@ -35,7 +36,14 @@ function auth(req, res, next) {
   }
 
   if (!process.env.VAPI_SECRET) return res.status(503).json({ error: 'Encargado sin secreto configurado' });
-  if (matchesConfiguredSecret(dado, process.env.VAPI_SECRET, process.env.VAPI_SECRET_PREVIOUS)) return next();
+  const kind = matchedSecretKind(dado, process.env.VAPI_SECRET, process.env.VAPI_SECRET_PREVIOUS);
+  if (kind) {
+    // V1.1: mismo contador que vapiAuth/legacyAuthOk en src/server.js — ver
+    // src/secret-match-counters.js. Solo cuenta este fallback (cuando NO hay
+    // ENCARGADO_SECRET propio, único caso en que se usa matchedSecretKind).
+    secretMatchCounters.recordSecretMatch(kind);
+    return next();
+  }
   return res.status(401).json({ error: 'Unauthorized' });
 }
 

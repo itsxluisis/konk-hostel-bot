@@ -74,6 +74,16 @@ async function esperaError(promesa) {
     assert.strictEqual(seen.url, 'https://api.vapi.ai/call/..%2F..%2Fetc%2Fpasswd');
   });
 
+  await t('getAssistant (V1.1) arma la URL con el id y usa GET', async () => {
+    let seen = null;
+    requestHandler = async (config) => { seen = config; return { data: { id: 'asst1', model: { model: 'gpt-4o-mini' } } }; };
+    const data = await vapiProxy.call('getAssistant', { params: { id: 'asst1' } });
+    assert.deepStrictEqual(data, { id: 'asst1', model: { model: 'gpt-4o-mini' } });
+    assert.strictEqual(seen.method, 'GET');
+    assert.strictEqual(seen.url, 'https://api.vapi.ai/assistant/asst1');
+    assert.strictEqual(seen.headers.Authorization, 'Bearer test-vapi-api-key');
+  });
+
   await t('patchAssistant manda PATCH con el body recibido', async () => {
     let seen = null;
     requestHandler = async (config) => { seen = config; return { data: { ok: true } }; };
