@@ -26,7 +26,26 @@ const app = express();
 // la cadena (el propio Traefik), nada más allá.
 app.set('trust proxy', 1);
 
+// ─── V1.2 (commit A): límite de cuerpo más alto solo para /vapi/assistant-config
+// El límite por defecto de express.json() es 100kb. El end-of-call-report de
+// Vapi incluye el prompt del assistant (unos 26 kB) más de una vez dentro
+// del payload (mensajes de tools ~48 kB) y el informe final puede superar
+// 100kb — una llamada real de 24-sep-2026 nunca llegó a este handler,
+// probablemente por esto. Montado ANTES del parser global: un cuerpo ya
+// parseado (req._body === true) no se vuelve a parsear, así que para esta
+// ruta manda el límite de 1mb de aquí y el resto de rutas sigue con el
+// límite de 100kb de más abajo, sin tocarlo.
+app.use('/vapi/assistant-config', express.json({ limit: '1mb' }));
+
 app.use(express.json());
+
+// Contador para /health de errores del body-parser (cuerpo demasiado grande
+// o JSON roto) — solo metadatos (ruta, tipo, tamaño declarado), nunca el
+// cuerpo en sí. El error-handling middleware que lo rellena vive al final
+// del archivo (Express solo invoca middleware de error — 4 argumentos —
+// registrado DESPUÉS del punto donde salta el error; con las rutas en medio
+// sigue viendo los fallos de los dos express.json() de arriba).
+const webhookBodyErrors = { count: 0, last: null };
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -824,6 +843,12 @@ app.get('/health', async (req, res) => {
     // pasado (ver arriba) — nunca bloquea nada, es solo visibilidad de
     // cuánto se dispara la guarda.
     availabilityDateRejections: { ...availabilityDateRejections },
+    // V1.2 (commit A): errores del body-parser (cuerpo grande / JSON roto) —
+    // ver middleware de error al final del archivo. Solo metadatos.
+    webhookBodyErrors: { count: webhookBodyErrors.count, last: webhookBodyErrors.last },
+    // V1.2 (commit A): cuántos end-of-call-report han llegado a
+    // /vapi/assistant-config, contado ANTES de la autenticación.
+    endOfCall: { ...endOfCallReports },
   });
 });
 
@@ -839,6 +864,14 @@ app.get('/health', async (req, res) => {
 // legacyAuthOk() cerca de vapiAuth, arriba.
 let warnedMissingEndOfCallSecret = false;
 
+// V1.2 (commit A): cuántos end-of-call-report LLEGAN a este handler, contado
+// ANTES de la autenticación — visibilidad independiente de si legacyAuthOk
+// pasa o no. Motivo: una llamada real de 24-sep-2026 no dejó rastro de su
+// informe de fin de llamada; si el payload no llega ni a esta línea (p. ej.
+// por el límite de cuerpo, ver commit A más arriba) este contador se queda
+// en 0 para esa llamada aunque el resto del log diga que terminó bien.
+const endOfCallReports = { received: 0, lastAt: null };
+
 // ─── VAPI: inyectar fecha actual al inicio de cada llamada ────────────────────
 app.get('/vapi/assistant-config', (req, res) => res.json({ ok: true }));
 app.post('/vapi/assistant-config', (req, res) => {
@@ -847,6 +880,8 @@ app.post('/vapi/assistant-config', (req, res) => {
 
   // Resumen post-llamada a Telegram
   if (eventType === 'end-of-call-report') {
+    endOfCallReports.received++;
+    endOfCallReports.lastAt = new Date().toISOString();
     if (!legacyAuthOk(req)) {
       if (VAPI_LEGACY_AUTH_MODE === 'strict') {
         console.warn('[end-of-call] RECHAZADO: informe sin secreto válido (modo strict)');
@@ -964,6 +999,29 @@ app.post('/vapi/assistant-config', (req, res) => {
       },
     },
   });
+});
+
+// ─── V1.2 (commit A): errores del body-parser (cuerpo grande / JSON roto) ────
+// express.json() llama a next(err) cuando el cuerpo supera el límite
+// (err.type === 'entity.too.large', 413) o no es JSON válido
+// (err.type === 'entity.parse.failed', 400). Sin este middleware, Express
+// respondía con su página de error HTML por defecto. Solo registra
+// metadatos (nunca el cuerpo) y cuenta en webhookBodyErrors para /health.
+// Cualquier otro error sigue su camino normal (next(err)) — no cambia el
+// comportamiento de errores que no vienen del body-parser.
+app.use((err, req, res, next) => {
+  if (!err || (err.type !== 'entity.too.large' && err.type !== 'entity.parse.failed')) {
+    return next(err);
+  }
+  const declaredLength = Number.isFinite(err.length) ? err.length : (Number(req.headers['content-length']) || null);
+  console.error(`[body-parser] ${err.type} en ${req.path} (longitud declarada: ${declaredLength ?? 'desconocida'})`);
+  webhookBodyErrors.count++;
+  webhookBodyErrors.last = { at: new Date().toISOString(), path: req.path, type: err.type, length: declaredLength };
+
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Cuerpo demasiado grande' });
+  }
+  return res.status(400).json({ error: 'JSON inválido' });
 });
 
 // ─── ARRANQUE ─────────────────────────────────────────────────────────────────
