@@ -99,6 +99,34 @@ function buildForwardCalendar(todayISO, days) {
   return lines.join(', ');
 }
 
+// V1.2 (commit C): prefijo hablado con las fechas consultadas, para
+// anteponerlo a la respuesta de disponibilidad — así, si el modelo se
+// equivoca en una fecha FUTURA (que esta guarda no toca, solo rechaza
+// fechas pasadas), el huésped al menos oye qué fechas se han consultado de
+// verdad y puede corregir. Mismo mes Y mismo año → un solo "de <mes>"
+// compartido; si cruza de mes (o de año, aunque sea "mismo número de mes")
+// cada fecha lleva su propio "de <mes>". Días en cifra, igual que
+// get_current_date. " de <año>" solo si esa fecha no es del año en curso.
+// `checkinISO`/`checkoutISO` deben ser ya válidos (se llama siempre después
+// de normalizeStayDates con ok:true).
+function spokenDateRangePrefix(checkinISO, checkoutISO, todayISO) {
+  const inP = parseISODate(checkinISO);
+  const outP = parseISODate(checkoutISO);
+  const currentYear = parseISODate(todayISO).year;
+
+  const inUTC = new Date(Date.UTC(inP.year, inP.month - 1, inP.day));
+  const outUTC = new Date(Date.UTC(outP.year, outP.month - 1, outP.day));
+  const inDia = SPOKEN_DIAS[inUTC.getUTCDay()];
+  const outDia = SPOKEN_DIAS[outUTC.getUTCDay()];
+  const yearSuffix = (year) => (year !== currentYear ? ` de ${year}` : '');
+
+  const sameMonth = inP.year === outP.year && inP.month === outP.month;
+  if (sameMonth) {
+    return `Del ${inDia} ${inP.day} al ${outDia} ${outP.day} de ${SPOKEN_MESES[inP.month - 1]}${yearSuffix(inP.year)}: `;
+  }
+  return `Del ${inDia} ${inP.day} de ${SPOKEN_MESES[inP.month - 1]}${yearSuffix(inP.year)} al ${outDia} ${outP.day} de ${SPOKEN_MESES[outP.month - 1]}${yearSuffix(outP.year)}: `;
+}
+
 /**
  * Normaliza checkin/checkout antes de consultar disponibilidad.
  *
@@ -133,4 +161,4 @@ function normalizeStayDates(checkin, checkout, todayISO) {
   return { ok: false, reason: 'pasada', nextOccurrence: nextOccurrenceOnOrAfter(inP, todayISO) };
 }
 
-module.exports = { normalizeStayDates, spokenDate, buildForwardCalendar };
+module.exports = { normalizeStayDates, spokenDate, buildForwardCalendar, spokenDateRangePrefix };

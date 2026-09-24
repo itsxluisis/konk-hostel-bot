@@ -54,7 +54,7 @@ delete process.env.ENCARGADO_SECRET;
 // Sembrar el token de Cloudbeds en memoria (misma instancia de módulo que
 // usará src/server.js, porque Node cachea por ruta absoluta resuelta).
 const cloudbeds = realRequire.call(module, path.join(__dirname, '../src/cloudbeds.js'));
-const { normalizeStayDates } = realRequire.call(module, path.join(__dirname, '../src/stay-dates.js'));
+const { normalizeStayDates, spokenDateRangePrefix } = realRequire.call(module, path.join(__dirname, '../src/stay-dates.js'));
 postHandler = async () => ({ data: { access_token: 'tok123', refresh_token: 'reftok123', expires_in: 3600 } });
 
 const app = realRequire.call(module, path.join(__dirname, '../src/server.js'));
@@ -165,6 +165,56 @@ function callAvailability(body) {
     const body = await r.json();
     assert.ok(body.result.includes('Necesito las fechas'), `debía pedir de nuevo las fechas: ${body.result}`);
     assert.strictEqual(cloudbedsCalls, 0);
+  });
+
+  // ── V1.2 commit C: prefijo de fechas en la respuesta de disponibilidad ──
+  // Ancladas a "hoy + 1 año" (nunca al día/mes concreto de hoy) para que las
+  // tres fechas sean SIEMPRE futuras y caigan en el mes/año exactos que se
+  // quiere probar, sin depender de en qué día del año se ejecute el test.
+  const todayISOc = todayMadridISO();
+  const baseYear = Number(todayISOc.slice(0, 4)) + 1;
+
+  await t('commit C · mismo mes: la respuesta empieza con "Del <día> al <día> de <mes>: "', async () => {
+    mockEmptyAvailability();
+    const checkin = `${baseYear}-06-05`;
+    const checkout = `${baseYear}-06-07`;
+    const expectedPrefix = spokenDateRangePrefix(checkin, checkout, todayISOc);
+    const r = await callAvailability({ checkin_date: checkin, checkout_date: checkout, guests: 2 });
+    const body = await r.json();
+    assert.ok(body.result.startsWith(expectedPrefix), `esperaba que empezara por "${expectedPrefix}": ${body.result}`);
+  });
+
+  await t('commit C · cruce de mes: cada fecha lleva su propio "de <mes>"', async () => {
+    mockEmptyAvailability();
+    const checkin = `${baseYear}-06-28`;
+    const checkout = `${baseYear}-07-02`;
+    const expectedPrefix = spokenDateRangePrefix(checkin, checkout, todayISOc);
+    assert.ok(expectedPrefix.includes('de junio') && expectedPrefix.includes('de julio'), 'el caso de prueba debía cruzar de mes');
+    const r = await callAvailability({ checkin_date: checkin, checkout_date: checkout, guests: 2 });
+    const body = await r.json();
+    assert.ok(body.result.startsWith(expectedPrefix), `esperaba que empezara por "${expectedPrefix}": ${body.result}`);
+  });
+
+  await t('commit C · cruce de año: la fecha de otro año lleva " de <año>"', async () => {
+    mockEmptyAvailability();
+    const checkin = `${baseYear}-12-30`;
+    const checkout = `${baseYear + 1}-01-02`;
+    const expectedPrefix = spokenDateRangePrefix(checkin, checkout, todayISOc);
+    assert.ok(expectedPrefix.includes(`de ${baseYear + 1}`), 'el caso de prueba debía cruzar de año');
+    const r = await callAvailability({ checkin_date: checkin, checkout_date: checkout, guests: 2 });
+    const body = await r.json();
+    assert.ok(body.result.startsWith(expectedPrefix), `esperaba que empezara por "${expectedPrefix}": ${body.result}`);
+  });
+
+  await t('commit C · sin disponibilidad también lleva las fechas por delante', async () => {
+    mockEmptyAvailability(); // 0 habitaciones → buildReply dice "No tenemos disponibilidad..."
+    const checkin = `${baseYear}-06-05`;
+    const checkout = `${baseYear}-06-07`;
+    const expectedPrefix = spokenDateRangePrefix(checkin, checkout, todayISOc);
+    const r = await callAvailability({ checkin_date: checkin, checkout_date: checkout, guests: 2 });
+    const body = await r.json();
+    assert.ok(body.result.startsWith(expectedPrefix), `esperaba el prefijo de fechas: ${body.result}`);
+    assert.ok(body.result.includes('No tenemos disponibilidad'), `esperaba el texto normal de "sin disponibilidad": ${body.result}`);
   });
 
   await t('/health expone availabilityDateRejections con count > 0 tras los rechazos de arriba', async () => {

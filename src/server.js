@@ -7,7 +7,7 @@ const express = require('express');
 const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
-const { normalizeStayDates, spokenDate, buildForwardCalendar } = require('./stay-dates');
+const { normalizeStayDates, spokenDate, buildForwardCalendar, spokenDateRangePrefix } = require('./stay-dates');
 const vigilante = require('./vigilante');
 const { matchedSecretKind, timingSafeEqualStr } = require('./secret-auth');
 const secretMatchCounters = require('./secret-match-counters');
@@ -397,8 +397,14 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
     // Fallback por si Cloudbeds no devolviera nights: calcularlo de las fechas
     const stayNights = nights || Math.max(1, Math.round((new Date(stayCheckout) - new Date(stayCheckin)) / 86400000));
     const reply = buildReply({ rooms, totalCapacity, guests, preference, nights: stayNights });
-    console.log(`[get-availability] reply: ${reply}`);
-    return vapiReply(req, res, reply);
+    // V1.2 (commit C): la consulta a Cloudbeds ha terminado bien (haya o no
+    // disponibilidad) — anteponer las fechas consultadas en español. Esta
+    // guarda solo rechaza checkin_date PASADO; si el modelo se equivoca en
+    // una fecha futura, el huésped no tenía forma de saberlo. No toca
+    // buildReply ni el texto que devuelve.
+    const datesPrefix = spokenDateRangePrefix(stayCheckin, stayCheckout, todayISO);
+    console.log(`[get-availability] reply: ${datesPrefix}${reply}`);
+    return vapiReply(req, res, datesPrefix + reply);
   } catch (err) {
     console.error(`[get-availability] Error (kind=${err?.kind || 'unknown'}):`, err.message);
     // Fire-and-forget: no bloquear la respuesta al bot por el aviso a Telegram

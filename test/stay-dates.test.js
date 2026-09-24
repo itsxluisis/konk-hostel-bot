@@ -6,7 +6,7 @@
 'use strict';
 
 const assert = require('assert');
-const { normalizeStayDates, spokenDate, buildForwardCalendar } = require('../src/stay-dates');
+const { normalizeStayDates, spokenDate, buildForwardCalendar, spokenDateRangePrefix } = require('../src/stay-dates');
 
 let pasan = 0, fallan = 0;
 function t(nombre, fn) {
@@ -92,6 +92,33 @@ t('calendario de hoy a +14 días: 15 líneas, incluye hoy/mañana y termina en +
   assert.ok(cal.includes('2026-09-25 (mañana)'), 'falta la entrada de mañana');
   assert.ok(cal.includes('2026-10-08 (en 14 días)'), 'falta la última entrada (+14 días)');
   assert.strictEqual(cal.split(', ').length, 15, 'debe tener 15 líneas (hoy + 14 días)');
+});
+
+console.log('\nspokenDateRangePrefix (V1.2 commit C):');
+
+t('mismo mes y año: un solo "de <mes>", sin sufijo de año (coincide con el actual)', () => {
+  const p = spokenDateRangePrefix('2026-10-10', '2026-10-12', '2026-09-24');
+  assert.strictEqual(p, 'Del sábado 10 al lunes 12 de octubre: ');
+});
+
+t('cruce de mes, mismo año: cada fecha con su propio "de <mes>", sin sufijo de año', () => {
+  const p = spokenDateRangePrefix('2026-09-29', '2026-10-02', '2026-09-24');
+  assert.strictEqual(p, 'Del martes 29 de septiembre al viernes 2 de octubre: ');
+});
+
+t('cruce de año: el checkin (año actual) no lleva sufijo, el checkout (año que viene) sí', () => {
+  const p = spokenDateRangePrefix('2026-12-30', '2027-01-02', '2026-09-24');
+  assert.strictEqual(p, 'Del miércoles 30 de diciembre al sábado 2 de enero de 2027: ');
+});
+
+t('cruce de año donde NINGUNA de las dos fechas es del año actual: ambas llevan sufijo', () => {
+  const p = spokenDateRangePrefix('2027-12-30', '2028-01-02', '2026-09-24');
+  assert.strictEqual(p, 'Del jueves 30 de diciembre de 2027 al domingo 2 de enero de 2028: ');
+});
+
+t('año actual: sin sufijo " de <año>" aunque cruce de mes', () => {
+  const p = spokenDateRangePrefix('2026-09-29', '2026-10-02', '2026-09-24');
+  assert.ok(!p.includes('2026'), 'no debía mostrar el año si coincide con el actual');
 });
 
 console.log(`\n${'='.repeat(40)}\n${pasan} OK, ${fallan} fallos`);
