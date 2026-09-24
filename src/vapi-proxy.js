@@ -22,6 +22,10 @@ const ROUTES = {
     method: 'GET',
     path: () => '/assistant',
   },
+  getAssistant: {
+    method: 'GET',
+    path: (params) => `/assistant/${encodeURIComponent(params.id)}`,
+  },
   patchAssistant: {
     method: 'PATCH',
     path: (params) => `/assistant/${encodeURIComponent(params.id)}`,
