@@ -7,6 +7,7 @@ const express = require('express');
 const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi } = require('./cloudbeds');
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
+const { normalizeStayDates, spokenDate, spokenDateRangePrefix } = require('./stay-dates');
 const vigilante = require('./vigilante');
 const { matchedSecretKind, timingSafeEqualStr } = require('./secret-auth');
 const secretMatchCounters = require('./secret-match-counters');
@@ -25,7 +26,26 @@ const app = express();
 // la cadena (el propio Traefik), nada más allá.
 app.set('trust proxy', 1);
 
+// ─── V1.2 (commit A): límite de cuerpo más alto solo para /vapi/assistant-config
+// El límite por defecto de express.json() es 100kb. El end-of-call-report de
+// Vapi incluye el prompt del assistant (unos 26 kB) más de una vez dentro
+// del payload (mensajes de tools ~48 kB) y el informe final puede superar
+// 100kb — una llamada real de 24-sep-2026 nunca llegó a este handler,
+// probablemente por esto. Montado ANTES del parser global: un cuerpo ya
+// parseado (req._body === true) no se vuelve a parsear, así que para esta
+// ruta manda el límite de 1mb de aquí y el resto de rutas sigue con el
+// límite de 100kb de más abajo, sin tocarlo.
+app.use('/vapi/assistant-config', express.json({ limit: '1mb' }));
+
 app.use(express.json());
+
+// Contador para /health de errores del body-parser (cuerpo demasiado grande
+// o JSON roto) — solo metadatos (ruta, tipo, tamaño declarado), nunca el
+// cuerpo en sí. El error-handling middleware que lo rellena vive al final
+// del archivo (Express solo invoca middleware de error — 4 argumentos —
+// registrado DESPUÉS del punto donde salta el error; con las rutas en medio
+// sigue viendo los fallos de los dos express.json() de arriba).
+const webhookBodyErrors = { count: 0, last: null };
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -296,6 +316,23 @@ async function alertCloudbedsFailure(req, err) {
   }
 }
 
+// ─── V1.2: guarda de fechas pasadas en get_availability ──────────────────────
+// 24-sep-2026 (docs/plan-mejora-voz-sep-2026.md): un huésped real pidió
+// "entrar mañana y salir el domingo" y gpt-4o-mini llamó a get_current_date y
+// get_availability EN PARALELO, mandando fechas de hace varios años —no un
+// año mal escrito, fechas inventadas—. Cloudbeds contesta success:false
+// ("startDate should be greater than today") y eso se oía como un error
+// técnico + disparaba una alerta a Telegram. Corregir la fecha nosotros
+// mismos habría podido dar una fecha igual de falsa (ver src/stay-dates.js),
+// así que NINGÚN checkin pasado se corrige solo: se rechaza sin llamar a
+// Cloudbeds ni avisar a Telegram, y se le pide al MODELO —no al huésped—
+// que recalcule con un calendario real.
+const MISSING_DATES_MSG = 'Necesito las fechas de entrada y salida para consultar disponibilidad.';
+
+// Contador para /health (visibilidad de cuánto dispara esta guarda; nunca
+// bloquea nada ni cambia la respuesta al bot).
+const availabilityDateRejections = { count: 0, lastAt: null };
+
 // ─── VAPI TOOL: get_availability ─────────────────────────────────────────────
 app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   const args = getToolArgs(req);
@@ -305,30 +342,71 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
   const preference = args.preference || args.room_type || 'any';
 
   if (!checkin_date || !checkout_date) {
-    return vapiReply(req, res, 'Necesito las fechas de entrada y salida para consultar disponibilidad.');
+    return vapiReply(req, res, MISSING_DATES_MSG);
   }
 
-  if (checkin_date >= checkout_date) {
+  // "Hoy" en Europe/Madrid con toLocaleDateString('en-CA', ...) — NO con el
+  // truco toLocaleString+toISOString (ver más abajo, nowMurcia): ese truco
+  // desplaza el DÍA según la zona horaria del contenedor. Se calcula aquí
+  // (único punto de I/O de reloj del handler) y se pasa al helper puro.
+  const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+
+  const normalized = normalizeStayDates(checkin_date, checkout_date, todayISO);
+  if (!normalized.ok) {
+    if (normalized.reason === 'formato') {
+      return vapiReply(req, res, MISSING_DATES_MSG);
+    }
+    // reason === 'pasada': ni Cloudbeds ni alerta a Telegram — no es un
+    // fallo técnico (H1), es una fecha que el modelo calculó mal.
+    //
+    // Fix (hallazgo ALTA del auditor, 24-sep-2026): vapi/system-prompt.md
+    // le dice al modelo que lea la respuesta de esta tool ENTERA Y TAL
+    // CUAL — así que el texto anterior, dirigido al modelo ("FECHAS NO
+    // VÁLIDAS... No le digas al huésped que hay un error..."), se estaba
+    // leyendo en voz alta al huésped. Arreglado SIN tocar el prompt: el
+    // texto de aquí tiene que valer para decirse tal cual, sin ISO, sin
+    // calendario y sin la palabra "error". El modelo ya sabe la fecha de
+    // hoy por el prompt y recalcula cuando el huésped repite las fechas.
+    // normalizeStayDates() sigue calculando nextOccurrence (se loguea, útil
+    // para depurar) pero ya no se dice.
+    availabilityDateRejections.count++;
+    availabilityDateRejections.lastAt = new Date().toISOString();
+    console.log(`[get-availability] fecha pasada rechazada: ${checkin_date}→${checkout_date} (hoy ${todayISO}, nextOccurrence=${normalized.nextOccurrence || 'n/d'})`);
+
+    return vapiReply(req, res,
+      `Perdona, no he entendido bien las fechas. Hoy es ${spokenDate(todayISO)}. ¿Qué día quieres entrar y qué día salir?`
+    );
+  }
+
+  const stayCheckin = normalized.checkin;
+  const stayCheckout = normalized.checkout;
+
+  if (stayCheckin >= stayCheckout) {
     return vapiReply(req, res, 'La salida tiene que ser al menos un día después de la entrada. ¿Para qué día sería el checkout?');
   }
 
   // Corte de reservas: misma noche a partir de las 22:30 (hora de Murcia)
   const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
-  const todayISO = nowMurcia.toISOString().split('T')[0];
   const h = nowMurcia.getHours(), m = nowMurcia.getMinutes();
-  if (checkin_date === todayISO && (h > 22 || (h === 22 && m >= 30))) {
+  if (stayCheckin === todayISO && (h > 22 || (h === 22 && m >= 30))) {
     return vapiReply(req, res, 'Lo siento, las reservas para esta noche ya han cerrado. El plazo límite son las diez y media de la noche. ¿Te consulto disponibilidad para mañana u otra fecha?');
   }
 
-  console.log(`[get-availability] ${checkin_date} → ${checkout_date} (${guests} pax, pref=${preference})`);
+  console.log(`[get-availability] ${stayCheckin} → ${stayCheckout} (${guests} pax, pref=${preference})`);
 
   try {
-    const { rooms, totalCapacity, nights } = await getAvailability(checkin_date, checkout_date, guests);
+    const { rooms, totalCapacity, nights } = await getAvailability(stayCheckin, stayCheckout, guests);
     // Fallback por si Cloudbeds no devolviera nights: calcularlo de las fechas
-    const stayNights = nights || Math.max(1, Math.round((new Date(checkout_date) - new Date(checkin_date)) / 86400000));
+    const stayNights = nights || Math.max(1, Math.round((new Date(stayCheckout) - new Date(stayCheckin)) / 86400000));
     const reply = buildReply({ rooms, totalCapacity, guests, preference, nights: stayNights });
-    console.log(`[get-availability] reply: ${reply}`);
-    return vapiReply(req, res, reply);
+    // V1.2 (commit C): la consulta a Cloudbeds ha terminado bien (haya o no
+    // disponibilidad) — anteponer las fechas consultadas en español. Esta
+    // guarda solo rechaza checkin_date PASADO; si el modelo se equivoca en
+    // una fecha futura, el huésped no tenía forma de saberlo. No toca
+    // buildReply ni el texto que devuelve.
+    const datesPrefix = spokenDateRangePrefix(stayCheckin, stayCheckout, todayISO);
+    console.log(`[get-availability] reply: ${datesPrefix}${reply}`);
+    return vapiReply(req, res, datesPrefix + reply);
   } catch (err) {
     console.error(`[get-availability] Error (kind=${err?.kind || 'unknown'}):`, err.message);
     // Fire-and-forget: no bloquear la respuesta al bot por el aviso a Telegram
@@ -769,6 +847,16 @@ app.get('/health', async (req, res) => {
     // legacyUnsigned=0 tras una llamada de prueba con el secreto nuevo (ver
     // src/secret-match-counters.js). Solo números/fechas, nunca secretos.
     ...secretMatchCounters.snapshot(),
+    // V1.2: cuántas veces get_availability ha rechazado un checkin_date
+    // pasado (ver arriba) — nunca bloquea nada, es solo visibilidad de
+    // cuánto se dispara la guarda.
+    availabilityDateRejections: { ...availabilityDateRejections },
+    // V1.2 (commit A): errores del body-parser (cuerpo grande / JSON roto) —
+    // ver middleware de error al final del archivo. Solo metadatos.
+    webhookBodyErrors: { count: webhookBodyErrors.count, last: webhookBodyErrors.last },
+    // V1.2 (commit A): cuántos end-of-call-report han llegado a
+    // /vapi/assistant-config, contado ANTES de la autenticación.
+    endOfCall: { ...endOfCallReports },
   });
 });
 
@@ -784,6 +872,14 @@ app.get('/health', async (req, res) => {
 // legacyAuthOk() cerca de vapiAuth, arriba.
 let warnedMissingEndOfCallSecret = false;
 
+// V1.2 (commit A): cuántos end-of-call-report LLEGAN a este handler, contado
+// ANTES de la autenticación — visibilidad independiente de si legacyAuthOk
+// pasa o no. Motivo: una llamada real de 24-sep-2026 no dejó rastro de su
+// informe de fin de llamada; si el payload no llega ni a esta línea (p. ej.
+// por el límite de cuerpo, ver commit A más arriba) este contador se queda
+// en 0 para esa llamada aunque el resto del log diga que terminó bien.
+const endOfCallReports = { received: 0, lastAt: null };
+
 // ─── VAPI: inyectar fecha actual al inicio de cada llamada ────────────────────
 app.get('/vapi/assistant-config', (req, res) => res.json({ ok: true }));
 app.post('/vapi/assistant-config', (req, res) => {
@@ -792,6 +888,8 @@ app.post('/vapi/assistant-config', (req, res) => {
 
   // Resumen post-llamada a Telegram
   if (eventType === 'end-of-call-report') {
+    endOfCallReports.received++;
+    endOfCallReports.lastAt = new Date().toISOString();
     if (!legacyAuthOk(req)) {
       if (VAPI_LEGACY_AUTH_MODE === 'strict') {
         console.warn('[end-of-call] RECHAZADO: informe sin secreto válido (modo strict)');
@@ -909,6 +1007,29 @@ app.post('/vapi/assistant-config', (req, res) => {
       },
     },
   });
+});
+
+// ─── V1.2 (commit A): errores del body-parser (cuerpo grande / JSON roto) ────
+// express.json() llama a next(err) cuando el cuerpo supera el límite
+// (err.type === 'entity.too.large', 413) o no es JSON válido
+// (err.type === 'entity.parse.failed', 400). Sin este middleware, Express
+// respondía con su página de error HTML por defecto. Solo registra
+// metadatos (nunca el cuerpo) y cuenta en webhookBodyErrors para /health.
+// Cualquier otro error sigue su camino normal (next(err)) — no cambia el
+// comportamiento de errores que no vienen del body-parser.
+app.use((err, req, res, next) => {
+  if (!err || (err.type !== 'entity.too.large' && err.type !== 'entity.parse.failed')) {
+    return next(err);
+  }
+  const declaredLength = Number.isFinite(err.length) ? err.length : (Number(req.headers['content-length']) || null);
+  console.error(`[body-parser] ${err.type} en ${req.path} (longitud declarada: ${declaredLength ?? 'desconocida'})`);
+  webhookBodyErrors.count++;
+  webhookBodyErrors.last = { at: new Date().toISOString(), path: req.path, type: err.type, length: declaredLength };
+
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Cuerpo demasiado grande' });
+  }
+  return res.status(400).json({ error: 'JSON inválido' });
 });
 
 // ─── ARRANQUE ─────────────────────────────────────────────────────────────────
