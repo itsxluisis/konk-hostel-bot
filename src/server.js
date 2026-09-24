@@ -8,9 +8,11 @@ const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi }
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
 const vigilante = require('./vigilante');
-const { matchesConfiguredSecret, timingSafeEqualStr } = require('./secret-auth');
+const { matchedSecretKind, timingSafeEqualStr } = require('./secret-auth');
+const secretMatchCounters = require('./secret-match-counters');
 const adminSession = require('./admin-session');
 const vapiProxy = require('./vapi-proxy');
+const { redactDeep } = require('./redact');
 
 const path = require('path');
 const fs = require('fs');
@@ -72,7 +74,11 @@ function vapiAuth(req, res, next) {
   }
 
   const provided = req.headers['x-vapi-secret'] || req.headers['authorization'];
-  if (matchesConfiguredSecret(provided, secret, process.env.VAPI_SECRET_PREVIOUS)) {
+  const kind = matchedSecretKind(provided, secret, process.env.VAPI_SECRET_PREVIOUS);
+  if (kind) {
+    // V1.1: contador de verificación de rotación (solo cuenta, no cambia la
+    // decisión de autorización — ver src/secret-match-counters.js).
+    secretMatchCounters.recordSecretMatch(kind);
     return next();
   }
   if (isAdminAuthenticated(req)) {
@@ -99,7 +105,12 @@ function legacyAuthOk(req) {
   const secret = process.env.VAPI_SECRET;
   if (!secret) return false;
   const provided = req.headers['x-vapi-secret'] || req.headers['authorization'];
-  return matchesConfiguredSecret(provided, secret, process.env.VAPI_SECRET_PREVIOUS);
+  const kind = matchedSecretKind(provided, secret, process.env.VAPI_SECRET_PREVIOUS);
+  if (kind) {
+    secretMatchCounters.recordSecretMatch(kind);
+    return true;
+  }
+  return false;
 }
 
 // ─── Middleware: panel admin (H3 — panel sin secretos) ────────────────────────
@@ -390,6 +401,9 @@ app.post('/vapi/get-weather', async (req, res) => {
       return vapiReply(req, res, 'No puedo consultar el tiempo ahora mismo', 401);
     }
     console.warn('[get-weather] Llamada SIN secreto válido — dejando pasar (modo warn)');
+    // V1.1: cuenta CADA petición sin secreto (no solo la primera) — es la
+    // señal que dice en /health cuándo ya se puede pasar a modo strict.
+    secretMatchCounters.recordLegacyUnsigned('getWeather');
     if (!warnedMissingWeatherSecret) {
       warnedMissingWeatherSecret = true;
       sendTelegram(
@@ -532,8 +546,13 @@ app.post('/admin/logout', adminAuth, (req, res) => {
 
 // ─── ADMIN: proxy a la API de Vapi (H3 — panel sin secretos) ─────────────────
 // La VAPI_API_KEY solo vive en el servidor (src/vapi-proxy.js). Allow-list
-// explícita: exactamente las 4 llamadas que hace public/index.html hoy
+// explícita: exactamente las llamadas que hace public/index.html hoy
 // (historial de llamadas, detalle de llamada, asistente, guardar prompt).
+//
+// V1.1 (docs/plan-mejora-voz-sep-2026.md): las 3 respuestas GET se redactan
+// (src/redact.js) antes de mandarlas al navegador — el objeto de Vapi trae
+// secretos de verdad (server.headers/secret de tools inline, monitor.listenUrl
+// /controlUrl de una llamada en vivo) que nunca deben llegar al panel.
 function vapiLimit(raw, fallback, max) {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -543,7 +562,7 @@ function vapiLimit(raw, fallback, max) {
 app.get('/admin/vapi/calls', adminAuth, async (req, res) => {
   try {
     const data = await vapiProxy.call('listCalls', { query: { limit: vapiLimit(req.query.limit, 50, 200) } });
-    res.json(data);
+    res.json(redactDeep(data));
   } catch (err) {
     console.error('[admin/vapi/calls]', err.message);
     res.status(502).json({ error: 'Error consultando Vapi' });
@@ -553,7 +572,7 @@ app.get('/admin/vapi/calls', adminAuth, async (req, res) => {
 app.get('/admin/vapi/calls/:id', adminAuth, async (req, res) => {
   try {
     const data = await vapiProxy.call('getCall', { params: { id: req.params.id } });
-    res.json(data);
+    res.json(redactDeep(data));
   } catch (err) {
     console.error('[admin/vapi/calls/:id]', err.message);
     res.status(502).json({ error: 'Error consultando Vapi' });
@@ -563,21 +582,94 @@ app.get('/admin/vapi/calls/:id', adminAuth, async (req, res) => {
 app.get('/admin/vapi/assistants', adminAuth, async (req, res) => {
   try {
     const data = await vapiProxy.call('listAssistants', { query: { limit: vapiLimit(req.query.limit, 10, 50) } });
-    res.json(data);
+    res.json(redactDeep(data));
   } catch (err) {
     console.error('[admin/vapi/assistants]', err.message);
     res.status(502).json({ error: 'Error consultando Vapi' });
   }
 });
 
+// ─── ADMIN: guardar asistente — fusión en servidor (V1.1) ────────────────────
+// El PATCH que sale del navegador antes reenviaba el `model` que mandara el
+// panel (Object.assign sobre lo último que se leyó por GET). Como el GET ya
+// viene redactado (arriba), ese `model` traía "[redactado]" en los secretos
+// de las tools — un guardado real los habría pisado en Vapi. Ahora el
+// navegador solo puede pedir 4 campos de texto; el `model` que se manda a
+// Vapi lo construye el SERVIDOR a partir del assistant real (nueva ruta
+// `getAssistant` en la allow-list de src/vapi-proxy.js), que nunca ha
+// pasado por el navegador.
+const ASSISTANT_PATCH_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const ASSISTANT_PATCH_MAX_LEN = { name: 80, modelName: 80, firstMessage: 1000, systemPrompt: 60000 };
+
+/**
+ * Valida el body del PATCH de asistente: SOLO { name, firstMessage,
+ * modelName, systemPrompt }, todos opcionales, todos string, con tope de
+ * longitud. Cualquier otro campo del body (en particular `model`, que es lo
+ * que mandaba el navegador antes) se ignora sin más: nunca se lee.
+ */
+function validateAssistantPatchFields(body) {
+  const fields = {};
+  for (const key of Object.keys(ASSISTANT_PATCH_MAX_LEN)) {
+    const val = body ? body[key] : undefined;
+    if (val === undefined) continue;
+    if (typeof val !== 'string') return { error: `${key} debe ser texto` };
+    if (val.length > ASSISTANT_PATCH_MAX_LEN[key]) {
+      return { error: `${key} supera el máximo de ${ASSISTANT_PATCH_MAX_LEN[key]} caracteres` };
+    }
+    fields[key] = val;
+  }
+  return { fields };
+}
+
+/**
+ * Construye el `model` a mandar a Vapi a partir del model REAL del
+ * asistente (con sus tools, toolIds y secretos reales — nunca han pasado
+ * por el navegador): cambia `model.model` si llega `modelName` y sustituye
+ * el contenido del mensaje `role:'system'` por `systemPrompt` si llega (si
+ * no hay mensaje system, lo añade al principio; conserva el resto de
+ * mensajes tal cual). No muta `realModel`.
+ */
+function buildAssistantModel(realModel, fields) {
+  const base = (realModel && typeof realModel === 'object') ? realModel : {};
+  const model = Object.assign({}, base);
+
+  if (fields.modelName !== undefined) {
+    model.model = fields.modelName;
+  }
+
+  if (fields.systemPrompt !== undefined) {
+    const messages = Array.isArray(base.messages) ? base.messages.slice() : [];
+    const idx = messages.findIndex((m) => m && m.role === 'system');
+    if (idx === -1) {
+      messages.unshift({ role: 'system', content: fields.systemPrompt });
+    } else {
+      messages[idx] = Object.assign({}, messages[idx], { content: fields.systemPrompt });
+    }
+    model.messages = messages;
+  }
+
+  return model;
+}
+
 app.patch('/admin/vapi/assistants/:id', adminAuth, async (req, res) => {
+  const { id } = req.params;
+  if (!ASSISTANT_PATCH_ID_RE.test(id)) {
+    return res.status(400).json({ error: 'id de asistente inválido' });
+  }
+
+  const { fields, error } = validateAssistantPatchFields(req.body);
+  if (error) return res.status(400).json({ error });
+
   try {
-    const { name, firstMessage, model } = req.body || {};
-    const data = await vapiProxy.call('patchAssistant', {
-      params: { id: req.params.id },
-      body: { name, firstMessage, model },
-    });
-    res.json(data);
+    const real = await vapiProxy.call('getAssistant', { params: { id } });
+    const model = buildAssistantModel(real && real.model, fields);
+
+    const patchBody = { model };
+    if (fields.name !== undefined) patchBody.name = fields.name;
+    if (fields.firstMessage !== undefined) patchBody.firstMessage = fields.firstMessage;
+
+    const data = await vapiProxy.call('patchAssistant', { params: { id }, body: patchBody });
+    res.json(redactDeep(data));
   } catch (err) {
     console.error('[admin/vapi/assistants/:id PATCH]', err.message);
     res.status(502).json({ error: 'Error actualizando Vapi' });
@@ -672,6 +764,11 @@ app.get('/health', async (req, res) => {
     // true si el Encargado tiene su propio secreto (ENCARGADO_SECRET) en vez
     // de reusar VAPI_SECRET como fallback de compatibilidad.
     encargadoSecretDedicated: !!process.env.ENCARGADO_SECRET,
+    // V1.1: contadores para decidir cuándo es seguro retirar
+    // VAPI_SECRET_PREVIOUS y pasar VAPI_LEGACY_AUTH a strict — previous=0 y
+    // legacyUnsigned=0 tras una llamada de prueba con el secreto nuevo (ver
+    // src/secret-match-counters.js). Solo números/fechas, nunca secretos.
+    ...secretMatchCounters.snapshot(),
   });
 });
 
@@ -701,6 +798,7 @@ app.post('/vapi/assistant-config', (req, res) => {
         return res.status(401).json({ error: 'Unauthorized' });
       }
       console.warn('[end-of-call] Informe SIN secreto válido — dejando pasar (modo warn)');
+      secretMatchCounters.recordLegacyUnsigned('endOfCall');
       if (!warnedMissingEndOfCallSecret) {
         warnedMissingEndOfCallSecret = true;
         sendTelegram(
