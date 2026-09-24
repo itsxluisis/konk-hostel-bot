@@ -8,6 +8,7 @@ const { exchangeCode, getAvailability, getAuthUrl, getToken, api: cloudbedsApi }
 const { send: sendTelegram } = require('./telegram');
 const { buildReply } = require('./availability');
 const { normalizeStayDates, spokenDate, spokenDateRangePrefix } = require('./stay-dates');
+const guestLookup = require('./guest-lookup');
 const vigilante = require('./vigilante');
 const { matchedSecretKind, timingSafeEqualStr } = require('./secret-auth');
 const secretMatchCounters = require('./secret-match-counters');
@@ -429,6 +430,24 @@ const INCIDENT_CATEGORY_LABELS = {
   otro: 'OTRO',
 };
 
+// V2a (24-sep-2026): una de cada cuatro llamadas del último mes era un
+// huésped que no podía entrar (Vikey) — priorizar esas incidencias de
+// verdad ayuda al equipo a reaccionar antes. Pura: recibe la hora de Madrid
+// ya calculada (mismo patrón que src/stay-dates.js, "no tocar el reloj
+// dentro de una función pura") para poder testearla sin depender del
+// instante real en que corren los tests. Urgente si: el huésped ya está
+// alojado (entró antes de hoy y no ha salido) — cualquier hora — o si llega
+// HOY y ya son las 15:00 o más en Europe/Madrid (hora de check-in por
+// defecto, ver memoria "Check-in 15:00 por defecto"). Antes de esa hora, una
+// llegada de hoy con un aviso de acceso no es aún una emergencia (podría ser
+// una duda sobre entrada anticipada).
+function isUrgentAccessIncident(stay, todayISO, madridHour) {
+  if (!stay || !stay.checkin || !stay.checkout) return false;
+  if (stay.checkin < todayISO && stay.checkout > todayISO) return true; // ya alojado
+  if (stay.checkin === todayISO) return madridHour >= 15;
+  return false;
+}
+
 app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
   const args = getToolArgs(req);
   const guest_name = args.guest_name || 'no indicado';
@@ -447,14 +466,37 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
     || 'no detectado';
   const phoneLabel = phone === 'no detectado' ? 'no detectado (ver resumen de llamada)' : phone;
 
+  // V2a: la estancia encontrada por teléfono se añade SOLO al aviso del
+  // EQUIPO (la respuesta hablada a Vapi, más abajo, no cambia). Nunca rompe
+  // el aviso si Cloudbeds falla (ver src/guest-lookup.js, que ya no lanza) —
+  // el try/catch de aquí es una segunda red de seguridad.
+  const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+  let stay = null;
+  try {
+    if (phone !== 'no detectado') {
+      stay = await guestLookup.findStayByPhone(phone, todayISO);
+    }
+  } catch (err) {
+    console.error('[report-incident] Error consultando la estancia (no bloquea el aviso):', err.message);
+  }
+
+  const stayLine = stay
+    ? `Reserva: ${stay.fullName || stay.firstName || '(sin nombre)'} · hab. ${stay.rooms ? stay.rooms.join(', ') : 'sin asignar'} · entrada ${stay.checkin || '?'} · salida ${stay.checkout || '?'} · canal ${stay.channel || '?'} · id ${stay.reservationId || '?'} · estado ${stay.status || '?'}`
+    : 'Reserva: no encontrada con este teléfono';
+
+  const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
+  const urgent = category === 'acceso' && isUrgentAccessIncident(stay, todayISO, nowMurcia.getHours());
+
   const msg =
+    (urgent ? '🚨 URGENTE — NO PUEDE ENTRAR\n' : '') +
     `🔴 INCIDENCIA — ${categoryLabel}\n` +
     `Huésped: ${guest_name}\n` +
     `Habitación: ${room}\n` +
     `Teléfono: ${phoneLabel}\n` +
+    `${stayLine}\n` +
     `Detalle: ${description}`;
 
-  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}`);
+  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}`);
 
   try {
     // Una incidencia de un huésped va al carril de alertas del grupo.
@@ -529,7 +571,17 @@ app.post('/vapi/get-weather', async (req, res) => {
 
 // ─── VAPI TOOL: get_current_date ─────────────────────────────────────────────
 // El bot llama esto cuando necesita saber la fecha/hora actual
-app.post('/vapi/get-current-date', vapiAuth, (req, res) => {
+//
+// V2a (24-sep-2026, docs/plan-mejora-voz-sep-2026.md): si el teléfono de
+// quien llama coincide con una llegada de hoy/mañana o un alojado de hoy en
+// Cloudbeds, se añade una frase con su reserva — nunca habitación, email,
+// teléfono ni importe (ver src/guest-lookup.js). Tope de GUEST_LOOKUP_TIMEOUT_MS:
+// si Cloudbeds tarda más, se responde sin esa línea (la consulta sigue en
+// segundo plano y alimenta la caché de 3 min para la siguiente tool call de
+// la misma llamada). No se toca el texto base de abajo.
+const GUEST_LOOKUP_TIMEOUT_MS = 2500;
+
+app.post('/vapi/get-current-date', vapiAuth, async (req, res) => {
   const now = new Date();
   const murcia = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
   const dias = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
@@ -552,9 +604,31 @@ app.post('/vapi/get-current-date', vapiAuth, (req, res) => {
 
   console.log(`[get-current-date] ${isoToday} ${hora}:${min} (Murcia)`);
 
-  return vapiReply(req, res,
-    `HOY es ${dias[murcia.getDay()]} ${murcia.getDate()} de ${meses[murcia.getMonth()]} (${isoToday}), son las ${hora}:${min}. Próximos 7 días: ${nextDays.filter((_,i) => i >= 7).join(', ')}.`
-  );
+  let reply = `HOY es ${dias[murcia.getDay()]} ${murcia.getDate()} de ${meses[murcia.getMonth()]} (${isoToday}), son las ${hora}:${min}. Próximos 7 días: ${nextDays.filter((_,i) => i >= 7).join(', ')}.`;
+
+  try {
+    const { phone: callerPhone } = extractVapiCallInfo(req);
+    if (callerPhone) {
+      // todayISO propio, independiente de isoToday de arriba: isoToday usa
+      // el truco toLocaleString+toISOString que V1.2 marcó como dependiente
+      // de la zona horaria del contenedor (memory.md, 24-sep-2026); esta
+      // consulta nueva usa el método seguro ya usado en /vapi/get-availability
+      // (toLocaleDateString('en-CA', ...)), sin tocar isoToday ni el texto base.
+      const lookupTodayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+      const stay = await Promise.race([
+        guestLookup.findStayByPhone(callerPhone, lookupTodayISO),
+        new Promise((resolve) => setTimeout(() => resolve(null), GUEST_LOOKUP_TIMEOUT_MS)),
+      ]);
+      if (stay && stay.firstName && stay.checkin && stay.checkout) {
+        reply += ` RESERVA DE QUIEN LLAMA: a nombre de ${stay.firstName}, entrada el ${spokenDate(stay.checkin)}, salida el ${spokenDate(stay.checkout)}.`;
+      }
+    }
+  } catch (err) {
+    // Nunca romper la tool por esto: sin estancia, el texto queda igual que hoy.
+    console.error('[get-current-date] Error añadiendo la reserva de quien llama (se responde sin esa línea):', err.message);
+  }
+
+  return vapiReply(req, res, reply);
 });
 // ─── DIAGNÓSTICO: ver estructura de room types en Cloudbeds ──────────────────
 // H14: antes aceptaba el secreto también por ?token= (query string); ahora
@@ -851,6 +925,10 @@ app.get('/health', async (req, res) => {
     // pasado (ver arriba) — nunca bloquea nada, es solo visibilidad de
     // cuánto se dispara la guarda.
     availabilityDateRejections: { ...availabilityDateRejections },
+    // V2a: estadísticas del reconocimiento de huésped por teléfono
+    // (get_current_date + report_incident) — solo números y fecha, nunca
+    // datos de huéspedes (ver src/guest-lookup.js).
+    guestLookup: guestLookup.healthSnapshot(),
     // V1.2 (commit A): errores del body-parser (cuerpo grande / JSON roto) —
     // ver middleware de error al final del archivo. Solo metadatos.
     webhookBodyErrors: { count: webhookBodyErrors.count, last: webhookBodyErrors.last },
@@ -1099,5 +1177,10 @@ OAuth:
   }
 
 });
+
+// V2a: expuesta para tests (test/vapi-guest-recognition.test.js) sin tener
+// que falsear el reloj global de un servidor real con otros temporizadores
+// vivos (vigilante, encargado…) — mismo motivo que la hace pura arriba.
+app.isUrgentAccessIncident = isUrgentAccessIncident;
 
 module.exports = app;
