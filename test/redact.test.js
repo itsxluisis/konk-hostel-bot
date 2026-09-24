@@ -76,6 +76,60 @@ t('redacta claves exactas (case-insensitive): token, accessToken, refreshToken, 
   Object.keys(obj).forEach((k) => assert.strictEqual(out[k], REDACTED, `${k} debería redactarse`));
 });
 
+t('V1.1 (ampliación del auditor): redacta por SUBCADENA en el nombre de clave, sin tocar campos no sensibles', () => {
+  const obj = {
+    id: 'asst_9',
+    name: 'Konk',
+    firstMessage: 'Hola, Konk Hostel',
+    clientSecret: 'MARCADOR-CS',
+    privateKey: 'MARCADOR-PK',
+    webhookSecret: 'MARCADOR-WHS',
+    bearerToken: 'MARCADOR-BT',
+    apiToken: 'MARCADOR-AT',
+    credentials: [{ apiKey: 'MARCADOR-CRED-AK', provider: 'openai' }],
+    transcriber: { provider: 'deepgram', apiKey: 'MARCADOR-TRANS-AK' },
+    model: {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'system', content: 'PROMPT DE VERDAD' }],
+    },
+    customer: { number: '+34600000000' },
+    status: 'ended',
+    transcript: 'AI: hola\nUser: hola',
+    createdAt: '2026-09-24T10:00:00.000Z',
+    costBreakdown: { promptTokens: 321, completionTokens: 45 },
+  };
+
+  const out = redactDeep(obj);
+
+  // Se redactan (subcadena sensible en el nombre de la clave, valor string)
+  assert.strictEqual(out.clientSecret, REDACTED);
+  assert.strictEqual(out.privateKey, REDACTED);
+  assert.strictEqual(out.webhookSecret, REDACTED);
+  assert.strictEqual(out.bearerToken, REDACTED);
+  assert.strictEqual(out.apiToken, REDACTED);
+  assert.strictEqual(out.credentials[0].apiKey, REDACTED);
+  assert.strictEqual(out.transcriber.apiKey, REDACTED);
+
+  // Siguen intactos: campo numérico (aunque "promptTokens" contenga
+  // "token") y el resto de campos no sensibles, tal cual.
+  assert.strictEqual(out.costBreakdown.promptTokens, 321);
+  assert.strictEqual(out.name, 'Konk');
+  assert.strictEqual(out.model.model, 'gpt-4o-mini');
+  assert.strictEqual(out.firstMessage, 'Hola, Konk Hostel');
+  assert.strictEqual(out.model.messages[0].content, 'PROMPT DE VERDAD');
+  assert.strictEqual(out.customer.number, '+34600000000');
+  assert.strictEqual(out.status, 'ended');
+  assert.strictEqual(out.transcript, 'AI: hola\nUser: hola');
+  assert.strictEqual(out.createdAt, '2026-09-24T10:00:00.000Z');
+  assert.strictEqual(out.credentials[0].provider, 'openai');
+  assert.strictEqual(out.transcriber.provider, 'deepgram');
+
+  const raw = JSON.stringify(out);
+  ['MARCADOR-CS', 'MARCADOR-PK', 'MARCADOR-WHS', 'MARCADOR-BT', 'MARCADOR-AT', 'MARCADOR-CRED-AK', 'MARCADOR-TRANS-AK'].forEach((m) => {
+    assert.ok(!raw.includes(m), `${m} debería haberse redactado`);
+  });
+});
+
 t('NO toca campos numéricos ni claves que solo "contienen" la palabra (tokens, promptTokens)', () => {
   const obj = { promptTokens: 123, tokens: 456, cost: { promptTokens: 12, completionTokens: 34 } };
   const out = redactDeep(obj);

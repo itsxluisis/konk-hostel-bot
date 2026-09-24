@@ -13,21 +13,16 @@
 
 const REDACTED = '[redactado]';
 
-// Claves EXACTAS (comparación case-insensitive) cuyo valor STRING se redacta
-// siempre, estén al nivel que estén del árbol. Comparación exacta: "tokens"
-// o "promptTokens" NO coinciden con "token" — así no se tocan los contadores
-// de coste/tokens de un LLM.
-const SENSITIVE_KEYS = new Set([
-  'secret',
-  'serverurlsecret',
-  'token',
-  'accesstoken',
-  'refreshtoken',
-  'apikey',
-  'password',
-  'authorization',
-  'x-vapi-secret',
-]);
+// Coincidencia por SUBCADENA (case-insensitive) en el nombre de la clave,
+// para el valor STRING de esa clave, esté al nivel que esté del árbol.
+// Ampliación pedida por el auditor tras la V1.1: la lista de nombres
+// EXACTOS se quedaba corta con variantes reales de Vapi/proveedores que no
+// se pueden enumerar todas (clientSecret, webhookSecret, privateKey,
+// bearerToken, apiToken, credentials[].apiKey, transcriber.apiKey...). Lo
+// que impide que se toquen los contadores de coste/tokens de un LLM (p. ej.
+// `promptTokens`, que SÍ contiene "token" como subcadena) es el guard de
+// tipo — más abajo, `typeof val === 'string'` — no el nombre de la clave.
+const SENSITIVE_KEY_RE = /secret|password|token|apikey|api[_-]?key|authorization|private[_-]?key/;
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -36,7 +31,8 @@ function isPlainObject(v) {
 /**
  * Clona en profundidad `value` (objeto o array, típicamente la respuesta de
  * un endpoint de Vapi) redactando:
- *  a) valores string de claves con nombre EXACTO (ver SENSITIVE_KEYS);
+ *  a) valores string de claves cuyo nombre CONTIENE alguna palabra
+ *     sensible (ver SENSITIVE_KEY_RE) — comparación por subcadena;
  *  b) TODOS los valores de cualquier objeto que cuelgue de una clave
  *     `headers` (se conservan las claves de cabecera, para ver qué existe);
  *  c) `monitor.listenUrl` y `monitor.controlUrl` (capacidades para
@@ -76,8 +72,9 @@ function redactNode(node, parentKeyLower) {
         continue;
       }
 
-      if (SENSITIVE_KEYS.has(keyLower) && typeof val === 'string') {
-        // (a) claves con nombre exacto — solo si el valor es string.
+      if (SENSITIVE_KEY_RE.test(keyLower) && typeof val === 'string') {
+        // (a) subcadena sensible en el nombre de la clave — solo si el
+        // valor es string (ver el comentario de SENSITIVE_KEY_RE arriba).
         out[key] = REDACTED;
         continue;
       }
