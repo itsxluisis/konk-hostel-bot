@@ -1095,6 +1095,8 @@ app.post('/vapi/assistant-config', (req, res) => {
 
     console.log(`[end-of-call] ${phone} | ${motivo} | ${durStr} | ${costeStr} | llamar: ${llamar}`);
 
+    // V2b: aviso "📞 LLAMAR" lleva un botón "✅ Hecho" (src/encargado/escucha.js
+    // gestiona la pulsación); "✅ No llamar" y el resto de avisos, sin botón.
     sendTelegram(
       `🏨 Konk Hostel · llamada\n\n` +
       `${cabecera}\n` +
@@ -1104,7 +1106,10 @@ app.post('/vapi/assistant-config', (req, res) => {
       `⏱️ Duración: ${durStr}\n` +
       `🕐 Cuándo: ${momento}\n` +
       `📱 Tel: ${phone}`,
-      { threadId: require('./encargado').hilo('LLAMADAS') }
+      {
+        threadId: require('./encargado').hilo('LLAMADAS'),
+        ...(llamar ? { keyboard: require('./encargado').botonLlamadaHecho() } : {}),
+      }
     ).catch(console.error);
 
     return res.json({});
