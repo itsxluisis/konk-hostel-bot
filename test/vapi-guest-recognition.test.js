@@ -29,8 +29,27 @@ const path = require('path');
 const Module = require('module');
 
 let allReservations = [];
-let extraDelayMs = 0; // solo durante el caso de timeout
+let extraDelayMs = 0; // solo durante los casos de timeout
 let telegramCalls = [];
+
+// Fuerza una carga fresca real desde Cloudbeds (cache-miss) en
+// guest-lookup.js, incluso si un caso anterior ya dejó la caché "atascada
+// en el futuro": fetchCandidates() sella cache.at con Date.now() en el
+// instante en que arranca la carga, así que si esa carga arrancó con el
+// reloj ya desplazado (como aquí), cache.at queda por delante del reloj
+// REAL — un desplazamiento fijo pequeño en el SIGUIENTE caso (p. ej.
+// siempre +3min) podría no bastar para superar esa caché ya adelantada.
+// Cada llamada usa un salto 10 minutos MAYOR que el anterior, así que
+// siempre gana por delante de cualquier caché atascada por un caso previo.
+// Devuelve una función para restaurar Date.now — usar siempre en finally.
+const realDateNow = Date.now;
+let freshOffsetSteps = 0;
+function forceFreshCloudbedsFetch() {
+  freshOffsetSteps += 1;
+  const offsetMs = freshOffsetSteps * 10 * 60 * 1000;
+  Date.now = () => realDateNow() + offsetMs;
+  return () => { Date.now = realDateNow; };
+}
 
 function paginateFixture(config) {
   const pageNumber = config.params.pageNumber || 1;
@@ -209,14 +228,13 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     // calentamiento al arrancar ya haya poblado la caché de HOY: sin esto,
     // el caso pasaría por una razón equivocada (respuesta instantánea desde
     // caché, sin llegar a ejercitar el Promise.race de 2,5s).
-    const realNow = Date.now;
-    Date.now = () => realNow() + 3 * 60 * 1000 + 1000;
+    const restoreClock = forceFreshCloudbedsFetch();
     extraDelayMs = 3500;
     const started = Date.now(); // con el reloj ya desplazado, solo para medir el propio caso
     const r = await callGetCurrentDate('+34 611 222 001'); // mismo huésped que sí existe (Marta)
     const elapsed = Date.now() - started;
     extraDelayMs = 0;
-    Date.now = realNow;
+    restoreClock();
     assert.strictEqual(r.status, 200);
     const body = await r.json();
     assert.ok(elapsed < 2900, `debía responder en menos de ~2.9s (tardó ${elapsed}ms)`);
@@ -311,6 +329,29 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     assert.ok(texto.includes('Reserva: no encontrada con este teléfono'));
   });
 
+  await t('condición del auditor (tope de tiempo, 24-sep-2026): si Cloudbeds tarda más de 2,5s, el aviso sale a tiempo con "Reserva: no consultada a tiempo" y SIN prefijo urgente calculado por reserva', async () => {
+    // Nora está alojada (rank 1): si SÍ diera tiempo, sería urgente sin
+    // depender de la hora — por eso es el caso más exigente para probar que
+    // el timeout suprime la urgencia calculada a partir de la reserva.
+    const restoreClock = forceFreshCloudbedsFetch();
+    extraDelayMs = 3500;
+    telegramCalls.length = 0;
+    const started = Date.now();
+    const r = await callReportIncident({ phone: '+34611222002', category: 'acceso', description: 'no puede entrar, y esta vez Cloudbeds no contesta a tiempo' });
+    const elapsed = Date.now() - started;
+    extraDelayMs = 0;
+    restoreClock();
+
+    assert.strictEqual(r.status, 200);
+    const body = await r.json();
+    assert.strictEqual(body.result, 'Incidencia registrada y equipo avisado.', 'la respuesta a Vapi no cambia');
+    assert.ok(elapsed < 2900, `el aviso no debía esperar más de ~2,5s por Cloudbeds (tardó ${elapsed}ms)`);
+    assert.strictEqual(telegramCalls.length, 1);
+    const texto = telegramCalls[0].text;
+    assert.ok(texto.includes('Reserva: no consultada a tiempo'), `debía indicar que no dio tiempo a consultar: ${texto}`);
+    assert.ok(!texto.startsWith('🚨'), 'sin datos de la reserva no se afirma urgencia, aunque Nora (de haber llegado a tiempo) sí lo fuera');
+  });
+
   console.log('\nGET /health · V2a\n');
 
   await t('/health expone guestLookup con matches/misses/errors/lastAt (solo números y fecha)', async () => {
@@ -336,6 +377,48 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     assert.strictEqual(typeof scan.at, 'string');
     const raw = JSON.stringify(scan);
     assert.ok(!raw.includes('Marta') && !raw.includes('Nora') && !raw.includes('611222'), 'scan nunca debe exponer nombres ni teléfonos');
+  });
+
+  console.log('\nEmpate real extremo a extremo (condición del auditor, 24-sep-2026) · último caso, va al final\n');
+
+  await t('empate real: get_current_date NO añade la línea (ambigüedad) y report_incident lista las DOS en el aviso, en orden determinista', async () => {
+    // Se ejecuta el último a propósito: sustituye allReservations por un
+    // fixture propio (dos reservas con el MISMO teléfono, llegando MAÑANA —
+    // rango 2, nunca urgente, así no interfiere con los casos de urgencia
+    // de arriba) y fuerza una carga fresca real; no hace falta restaurar
+    // nada después porque no quedan más casos que dependan del fixture
+    // original de Marta/Nora.
+    allReservations = [
+      reserva({
+        id: 'TIE-B', checkin: MANANA, checkout: EN_5_DIAS, channel: 'Airbnb',
+        guests: [{ guestID: 'g1', first: 'Bruno', last: 'Empate', phone: '+34611222900', isMainGuest: true }],
+      }),
+      reserva({
+        id: 'TIE-A', checkin: MANANA, checkout: EN_5_DIAS, channel: 'Airbnb',
+        guests: [{ guestID: 'g1', first: 'Alba', last: 'Empate', phone: '+34611222900', isMainGuest: true }],
+      }),
+    ];
+    const restoreClock = forceFreshCloudbedsFetch(); // fuerza que esta ampliación se recoja de verdad
+    try {
+      const r1 = await callGetCurrentDate('+34611222900');
+      const body1 = await r1.json();
+      assert.ok(!body1.result.includes('RESERVA DE QUIEN LLAMA'), 'con empate real, get_current_date no debe revelar ninguna de las dos reservas');
+
+      telegramCalls.length = 0;
+      const r2 = await callReportIncident({ phone: '+34611222900', category: 'acceso', description: 'no entra ninguno de los dos' });
+      assert.strictEqual(r2.status, 200);
+      const texto = telegramCalls[0].text;
+      assert.ok(texto.includes('Reserva 1/2:'), `debía listar la primera de las dos: ${texto}`);
+      assert.ok(texto.includes('Reserva 2/2:'), `debía listar la segunda de las dos: ${texto}`);
+      assert.ok(texto.includes('Alba Empate'), 'debía nombrar a Alba');
+      assert.ok(texto.includes('Bruno Empate'), 'debía nombrar a Bruno');
+      // Orden determinista por id de reserva (mismo checkin ambas): TIE-A
+      // antes que TIE-B, aunque TIE-B se insertó primero en el fixture.
+      assert.ok(texto.indexOf('TIE-A') < texto.indexOf('TIE-B'), 'orden determinista por id, no por inserción');
+      assert.ok(!texto.startsWith('🚨'), 'llegan mañana (rango 2): nunca urgente, haya empate o no');
+    } finally {
+      restoreClock();
+    }
   });
 
   console.log(`\n${'='.repeat(40)}\n${pasan} OK, ${fallan} fallos`);

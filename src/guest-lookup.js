@@ -7,8 +7,18 @@
 // canal de contacto nuevo.
 //
 // Cualquier fallo de Cloudbeds (red, auth, timeout, success:false, forma
-// inesperada) se traga aquí: se loguea y se devuelve null. Las tools que
+// inesperada) se traga aquí: se loguea y se devuelve null/[]. Las tools que
 // llaman a este módulo nunca deben romperse por esto (ver server.js).
+//
+// Corrección de NEXO (auditor, 24-sep-2026): si el teléfono coincide con
+// varias reservas del MISMO rango (empate real, p. ej. dos llegadas de
+// hoy), findStayByPhone() devuelve null (ambigüedad = no revelar nada) y
+// findStaysByPhone() (nueva, usada por report_incident) lista TODAS las
+// empatadas, como mucho 3, en orden determinista (fecha de entrada, luego
+// id de reserva) — nunca según el orden de respuesta de Cloudbeds. El tope
+// de 2,5s frente a Cloudbeds (Promise.race) vive en server.js, en ambas
+// tools; findStaysByPhone/findStayByPhone en sí no tienen temporizador
+// propio.
 'use strict';
 
 const { api } = require('./cloudbeds');
@@ -94,6 +104,12 @@ function healthSnapshot() {
 // varios días arriba.
 const CACHE_TTL_MS = 3 * 60 * 1000;
 let cache = { key: null, at: 0, reservations: null };
+// V2a corrección NEXO (auditor, 24-sep-2026): promesa en vuelo compartida —
+// mismo patrón que refreshPromise en getToken() de src/cloudbeds.js. Si dos
+// llamadas coinciden con la caché fría o recién vencida para el MISMO
+// todayISO (p. ej. get_current_date y report_incident casi a la vez), la
+// segunda espera a la primera en vez de repaginar Cloudbeds por su cuenta.
+let inFlight = null; // { key, promise } | null
 
 async function fetchAllPages(params) {
   const out = [];
@@ -133,36 +149,52 @@ async function fetchCandidates(todayISO, tomorrowISO) {
   if (cache.key === cacheKey && (now - cache.at) < CACHE_TTL_MS) {
     return cache.reservations;
   }
-
-  const [arrivalsRaw, inHouseRaw] = await Promise.all([
-    fetchAllPages({ checkInFrom: todayISO, checkInTo: tomorrowISO }),
-    fetchAllPages({ checkInTo: todayISO, checkOutFrom: todayISO }),
-  ]);
-
-  const arrivals = arrivalsRaw.filter(r => r.startDate === todayISO || r.startDate === tomorrowISO);
-  const inHouse = inHouseRaw.filter(r => r.startDate <= todayISO && r.endDate > todayISO);
-
-  const byId = new Map();
-  for (const r of [...arrivals, ...inHouse]) {
-    if (r && r.reservationID != null && !byId.has(r.reservationID)) byId.set(r.reservationID, r);
+  if (inFlight && inFlight.key === cacheKey) {
+    return inFlight.promise;
   }
-  // Sin canceladas ni no-show (mismos valores de status que ya usa src/vigilante.js).
-  const reservations = Array.from(byId.values())
-    .filter(r => !['canceled', 'no_show'].includes(r.status));
 
-  cache = { key: cacheKey, at: now, reservations };
+  const promise = (async () => {
+    const [arrivalsRaw, inHouseRaw] = await Promise.all([
+      fetchAllPages({ checkInFrom: todayISO, checkInTo: tomorrowISO }),
+      fetchAllPages({ checkInTo: todayISO, checkOutFrom: todayISO }),
+    ]);
 
-  // V2a corrección NEXO: recuento de esta carga real — SOLO números, nunca
-  // nombres ni teléfonos — para poder comprobar en /health, contra Cloudbeds
-  // de verdad, que guestPhone/rooms realmente llegan (ver healthSnapshot()).
-  scan = {
-    at: new Date().toISOString(),
-    reservations: reservations.length,
-    withPhone: reservations.filter(r => reservationPhones(r).length > 0).length,
-    withRoom: reservations.filter(r => { const rm = roomsOf(r); return !!(rm && rm.length); }).length,
-  };
+    const arrivals = arrivalsRaw.filter(r => r.startDate === todayISO || r.startDate === tomorrowISO);
+    const inHouse = inHouseRaw.filter(r => r.startDate <= todayISO && r.endDate > todayISO);
 
-  return reservations;
+    const byId = new Map();
+    for (const r of [...arrivals, ...inHouse]) {
+      if (r && r.reservationID != null && !byId.has(r.reservationID)) byId.set(r.reservationID, r);
+    }
+    // Sin canceladas ni no-show (mismos valores de status que ya usa src/vigilante.js).
+    const reservations = Array.from(byId.values())
+      .filter(r => !['canceled', 'no_show'].includes(r.status));
+
+    cache = { key: cacheKey, at: now, reservations };
+
+    // V2a corrección NEXO: recuento de esta carga real — SOLO números, nunca
+    // nombres ni teléfonos — para poder comprobar en /health, contra
+    // Cloudbeds de verdad, que guestPhone/rooms realmente llegan (ver
+    // healthSnapshot()).
+    scan = {
+      at: new Date().toISOString(),
+      reservations: reservations.length,
+      withPhone: reservations.filter(r => reservationPhones(r).length > 0).length,
+      withRoom: reservations.filter(r => { const rm = roomsOf(r); return !!(rm && rm.length); }).length,
+    };
+
+    return reservations;
+  })();
+
+  inFlight = { key: cacheKey, promise };
+  try {
+    return await promise;
+  } finally {
+    // Solo se borra si sigue siendo LA MISMA promesa (por si, entre medias,
+    // otra llamada ya la sustituyó — no debería pasar con esta clave, pero
+    // es la misma cautela que usa refreshPromise en cloudbeds.js).
+    if (inFlight && inFlight.promise === promise) inFlight = null;
+  }
 }
 
 /**
@@ -317,20 +349,41 @@ function toStay(r) {
   };
 }
 
+// Orden determinista para desempatar varias reservas en el MISMO rango
+// (mismo nivel de prioridad: p. ej. dos que llegan hoy) — corrección de
+// NEXO (auditor, 24-sep-2026): antes el orden dependía de en qué orden
+// respondía Cloudbeds (inserción en el Map de fetchCandidates), no
+// determinista. Por fecha de entrada y, si coincide, por id de reserva
+// (como texto, orden estable y reproducible).
+function compareForOrder(a, b) {
+  if (a.startDate !== b.startDate) return a.startDate < b.startDate ? -1 : 1;
+  const idA = String(a.reservationID ?? '');
+  const idB = String(b.reservationID ?? '');
+  if (idA === idB) return 0;
+  return idA < idB ? -1 : 1;
+}
+
+// Tope de reservas empatadas que se listan a report_incident — un aviso con
+// una lista larga deja de ser legible para el equipo.
+const MAX_TIE_CANDIDATES = 3;
+
 /**
- * Busca la estancia (llegada hoy/mañana o alojado hoy) cuyo teléfono
- * coincide con `phone`. Nunca lanza: cualquier fallo de Cloudbeds se
- * loguea en consola y devuelve null, sin avisar a Telegram, para no romper
- * la tool de Vapi que la llama (ver docs/plan-mejora-voz-sep-2026.md, V2a).
+ * Núcleo compartido de la búsqueda: candidatas cuyo teléfono coincide,
+ * recortadas al RANGO GANADOR (rankOf más bajo: llega-hoy > alojado >
+ * llega-mañana) y ordenadas de forma determinista (compareForOrder) — nunca
+ * por el orden en que respondió Cloudbeds. Nunca lanza: cualquier fallo de
+ * Cloudbeds se loguea, cuenta en errors, y se trata como "sin candidatas".
+ * Actualiza los contadores de /health UNA vez por llamada (independiente de
+ * si el resultado acaba siendo ambiguo o no: "matches" cuenta que SÍ se
+ * encontró alguna reserva para ese teléfono).
  *
- * @param {string} phone     Teléfono de quien llama, tal cual lo manda Vapi.
- * @param {string} todayISO  'YYYY-MM-DD' de hoy en Europe/Madrid.
- * @returns {Promise<object|null>}
+ * @returns {Promise<Array>} reservas crudas de Cloudbeds del rango ganador
+ *   (0, 1 o varias si hay empate), NUNCA más de las que de verdad empatan.
  */
-async function findStayByPhone(phone, todayISO) {
-  if (!phone || typeof todayISO !== 'string') return null;
+async function resolveWinningMatches(phone, todayISO) {
+  if (!phone || typeof todayISO !== 'string') return [];
   const normalizedCaller = normalizePhone(phone);
-  if (!normalizedCaller) return null;
+  if (!normalizedCaller) return [];
 
   try {
     const tomorrowISO = addDaysISO(todayISO, 1);
@@ -343,20 +396,64 @@ async function findStayByPhone(phone, todayISO) {
     counters.lastAt = new Date().toISOString();
     if (!matches.length) {
       counters.misses++;
-      return null;
+      return [];
     }
     counters.matches++;
-    if (matches.length > 1) {
-      console.log(`[guest-lookup] ${matches.length} coincidencias para el mismo teléfono — prioridad llega-hoy > alojado > llega-mañana`);
+
+    const bestRank = matches.reduce((min, r) => Math.min(min, rankOf(r, todayISO)), Infinity);
+    const winning = matches
+      .filter(r => rankOf(r, todayISO) === bestRank)
+      .sort(compareForOrder);
+
+    if (winning.length > 1) {
+      console.log(`[guest-lookup] ${winning.length} coincidencias EMPATADAS en el mismo rango para el mismo teléfono (orden determinista por entrada/id)`);
     }
-    matches.sort((a, b) => rankOf(a, todayISO) - rankOf(b, todayISO));
-    return toStay(matches[0]);
+    return winning;
   } catch (err) {
     counters.errors++;
     counters.lastAt = new Date().toISOString();
     console.error('[guest-lookup] Error consultando Cloudbeds:', err.message);
-    return null;
+    return [];
   }
 }
 
-module.exports = { findStayByPhone, normalizePhone, phonesMatch, healthSnapshot, warmCache };
+/**
+ * Busca la estancia (llegada hoy/mañana o alojado hoy) cuyo teléfono
+ * coincide con `phone`. Nunca lanza: cualquier fallo de Cloudbeds se
+ * loguea en consola y devuelve null, sin avisar a Telegram, para no romper
+ * la tool de Vapi que la llama (ver docs/plan-mejora-voz-sep-2026.md, V2a).
+ *
+ * Corrección de NEXO (auditor, 24-sep-2026): si el teléfono coincide con
+ * MÁS DE UNA reserva del mismo rango (empate real, p. ej. dos llegadas de
+ * hoy), devuelve null a propósito — la ambigüedad no se resuelve inventando
+ * un orden, se trata como "no se puede revelar de forma segura" (para eso
+ * está findStaysByPhone, que sí lista todas las empatadas).
+ *
+ * @param {string} phone     Teléfono de quien llama, tal cual lo manda Vapi.
+ * @param {string} todayISO  'YYYY-MM-DD' de hoy en Europe/Madrid.
+ * @returns {Promise<object|null>}
+ */
+async function findStayByPhone(phone, todayISO) {
+  const winning = await resolveWinningMatches(phone, todayISO);
+  if (winning.length !== 1) return null;
+  return toStay(winning[0]);
+}
+
+/**
+ * Como findStayByPhone, pero pensada para report_incident: en vez de exigir
+ * una única reserva inequívoca, devuelve TODAS las del rango ganador
+ * (incluido el empate), como mucho `max` (por defecto MAX_TIE_CANDIDATES),
+ * en el mismo orden determinista. Array vacío si no hay ninguna coincidencia
+ * o si Cloudbeds falla (nunca lanza).
+ *
+ * @param {string} phone
+ * @param {string} todayISO
+ * @param {{max?: number}} [opts]
+ * @returns {Promise<Array<object>>}
+ */
+async function findStaysByPhone(phone, todayISO, { max = MAX_TIE_CANDIDATES } = {}) {
+  const winning = await resolveWinningMatches(phone, todayISO);
+  return winning.slice(0, max).map(toStay);
+}
+
+module.exports = { findStayByPhone, findStaysByPhone, normalizePhone, phonesMatch, healthSnapshot, warmCache };

@@ -56,7 +56,7 @@ process.env.CLOUDBEDS_CLIENT_ID = 'test-client';
 process.env.CLOUDBEDS_CLIENT_SECRET = 'test-secret';
 
 const cloudbeds = realRequire.call(module, path.join(__dirname, '../src/cloudbeds.js'));
-const { findStayByPhone, normalizePhone, phonesMatch, healthSnapshot } = realRequire.call(module, path.join(__dirname, '../src/guest-lookup.js'));
+const { findStayByPhone, findStaysByPhone, normalizePhone, phonesMatch, healthSnapshot } = realRequire.call(module, path.join(__dirname, '../src/guest-lookup.js'));
 
 let pasan = 0, fallan = 0;
 async function t(nombre, fn) {
@@ -485,6 +485,89 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     assert.strictEqual(r, null);
     const after = healthSnapshot();
     assert.strictEqual(after.errors, before.errors + 1);
+  });
+
+  console.log('\nfindStayByPhone / findStaysByPhone — empates en el rango ganador (corrección del auditor, 24-sep-2026):\n');
+
+  await t('empate en rango 0 (dos llegan HOY con el mismo teléfono): findStayByPhone → null (ambigüedad, no revela nada)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'Z999', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Uno', last: 'A', phone: '+34600100100', isMainGuest: true }] }),
+      reserva({ id: 'A111', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Dos', last: 'B', phone: '+34600100100', isMainGuest: true }] }),
+    ];
+    const r = await findStayByPhone('+34600100100', hoy);
+    assert.strictEqual(r, null, 'un empate real debe devolver null, nunca elegir una al azar');
+  });
+
+  await t('el mismo empate: findStaysByPhone devuelve las DOS, ordenadas por id de reserva — determinista, no por orden de inserción (Z999 se insertó antes que A111)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'Z999', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Uno', last: 'A', phone: '+34600100200', isMainGuest: true }] }),
+      reserva({ id: 'A111', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Dos', last: 'B', phone: '+34600100200', isMainGuest: true }] }),
+    ];
+    const rs = await findStaysByPhone('+34600100200', hoy);
+    assert.strictEqual(rs.length, 2);
+    assert.deepStrictEqual(rs.map(s => s.reservationId), ['A111', 'Z999'], 'orden determinista por id, no por inserción');
+  });
+
+  await t('empate en rango 1 (dos alojados con distinta fecha de entrada): findStaysByPhone ordena por fecha de entrada (la más antigua primero), aunque se inserte al revés; findStayByPhone también ve el empate', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      // Se inserta primero la de entrada MÁS RECIENTE (debería quedar segunda).
+      reserva({ id: 'R-RECIENTE', checkin: addDays(hoy, -1), checkout: addDays(hoy, 3), guests: [{ guestID: 'g1', first: 'Tres', last: 'C', phone: '+34600100300', isMainGuest: true }] }),
+      reserva({ id: 'R-ANTIGUA', checkin: addDays(hoy, -5), checkout: addDays(hoy, 3), guests: [{ guestID: 'g1', first: 'Cuatro', last: 'D', phone: '+34600100300', isMainGuest: true }] }),
+    ];
+    const rs = await findStaysByPhone('+34600100300', hoy);
+    assert.strictEqual(rs.length, 2);
+    assert.deepStrictEqual(rs.map(s => s.reservationId), ['R-ANTIGUA', 'R-RECIENTE'], 'la que entró antes va primero, aunque se insertara después');
+    const solo = await findStayByPhone('+34600100300', hoy); // misma caché (mismo teléfono/hoy)
+    assert.strictEqual(solo, null, 'findStayByPhone también ve el empate y devuelve null');
+  });
+
+  await t('más de 3 empatadas: findStaysByPhone se limita a MAX_TIE_CANDIDATES (3), en orden determinista', async () => {
+    const hoy = diaUnico();
+    const tel = '+34600100400';
+    allReservations = [
+      reserva({ id: 'D', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'D', last: 'D', phone: tel, isMainGuest: true }] }),
+      reserva({ id: 'B', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'B', last: 'B', phone: tel, isMainGuest: true }] }),
+      reserva({ id: 'A', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'A', last: 'A', phone: tel, isMainGuest: true }] }),
+      reserva({ id: 'C', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'C', last: 'C', phone: tel, isMainGuest: true }] }),
+    ];
+    const rs = await findStaysByPhone(tel, hoy);
+    assert.strictEqual(rs.length, 3, 'se recorta a 3 aunque haya 4 empatadas');
+    assert.deepStrictEqual(rs.map(s => s.reservationId), ['A', 'B', 'C'], 'las 3 primeras en orden alfabético de id (mismo checkin)');
+  });
+
+  await t('sin empate real (una sola reserva en el rango ganador): findStaysByPhone también funciona, con 1 elemento', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'UNICA', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Sole', last: 'Vidal', phone: '+34600100500', isMainGuest: true }] }),
+    ];
+    const rs = await findStaysByPhone('+34600100500', hoy);
+    assert.strictEqual(rs.length, 1);
+    assert.strictEqual(rs[0].reservationId, 'UNICA');
+  });
+
+  console.log('\nfetchCandidates — promesa en vuelo compartida (corrección del auditor, 24-sep-2026):\n');
+
+  await t('dos búsquedas simultáneas con la caché fría no duplican las llamadas a Cloudbeds', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'CONC1', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Concu', last: 'Rrente', phone: '+34600100600', isMainGuest: true }] }),
+    ];
+    axiosCalls = 0;
+    const [r1, r2] = await Promise.all([
+      findStayByPhone('+34600100600', hoy),
+      findStayByPhone('+34600100600', hoy),
+    ]);
+    assert.ok(r1 && r2, 'las dos búsquedas debían encontrar la reserva');
+    assert.strictEqual(r1.reservationId, 'CONC1');
+    assert.strictEqual(r2.reservationId, 'CONC1');
+    // fetchCandidates hace 2 consultas reales (llegadas + alojados), 1
+    // página cada una con este fixture pequeño. Si las dos búsquedas
+    // comparten la promesa en vuelo: 2 llamadas a axios en total. Si la
+    // duplicaran (sin compartir): 4.
+    assert.strictEqual(axiosCalls, 2, 'las dos búsquedas simultáneas debían compartir la misma carga (2 llamadas), no duplicarla (4)');
   });
 
   console.log('\nhealthSnapshot().scan:');

@@ -420,6 +420,34 @@ app.post('/vapi/get-availability', vapiAuth, async (req, res) => {
 
 
 
+// V2a (24-sep-2026, docs/plan-mejora-voz-sep-2026.md): tope de tiempo
+// COMPARTIDO frente a Cloudbeds para get_current_date Y report_incident.
+// Corrección del auditor (24-sep-2026): report_incident llamaba a
+// findStayByPhone SIN carrera — con la caché fría y Cloudbeds lento, el
+// aviso de "no puede entrar" podía retrasarse varios segundos (hasta el
+// timeout de 6s de la propia llamada HTTP en cloudbeds.js). Ninguna de las
+// dos tools espera más de GUEST_LOOKUP_TIMEOUT_MS por Cloudbeds: si vence,
+// get_current_date responde sin la línea de reserva (igual que si no
+// hubiera estancia) y report_incident manda el aviso con "Reserva: no
+// consultada a tiempo" (ver más abajo). GUEST_LOOKUP_TIMED_OUT es un Symbol
+// para no poder confundirse nunca con null, un array vacío o una estancia
+// real.
+const GUEST_LOOKUP_TIMEOUT_MS = 2500;
+const GUEST_LOOKUP_TIMED_OUT = Symbol('guest-lookup-timed-out');
+function withGuestLookupTimeout(promise) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(GUEST_LOOKUP_TIMED_OUT), GUEST_LOOKUP_TIMEOUT_MS)),
+  ]);
+}
+
+// Línea "Reserva: ..." del aviso de Telegram de report_incident — un único
+// sitio para no repetir la plantilla cuando hay varias reservas empatadas
+// (ver findStaysByPhone en src/guest-lookup.js).
+function formatStayLine(stay) {
+  return `${stay.fullName || stay.firstName || '(sin nombre)'} · hab. ${stay.rooms ? stay.rooms.join(', ') : 'sin asignar'} · entrada ${stay.checkin || '?'} · salida ${stay.checkout || '?'} · canal ${stay.channel || '?'} · id ${stay.reservationId || '?'} · estado ${stay.status || '?'}`;
+}
+
 // ─── VAPI TOOL: report_incident ──────────────────────────────────────────────
 // Escala una incidencia de huésped al equipo del hostel vía Telegram.
 const INCIDENT_CATEGORY_LABELS = {
@@ -466,26 +494,53 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
     || 'no detectado';
   const phoneLabel = phone === 'no detectado' ? 'no detectado (ver resumen de llamada)' : phone;
 
-  // V2a: la estancia encontrada por teléfono se añade SOLO al aviso del
-  // EQUIPO (la respuesta hablada a Vapi, más abajo, no cambia). Nunca rompe
-  // el aviso si Cloudbeds falla (ver src/guest-lookup.js, que ya no lanza) —
-  // el try/catch de aquí es una segunda red de seguridad.
+  // V2a: la(s) estancia(s) encontradas por teléfono se añaden SOLO al aviso
+  // del EQUIPO (la respuesta hablada a Vapi, más abajo, no cambia). Nunca
+  // rompe el aviso si Cloudbeds falla o tarda (findStaysByPhone no lanza;
+  // withGuestLookupTimeout limita la espera) — el try/catch de aquí es una
+  // segunda red de seguridad. Corrección del auditor (24-sep-2026): antes
+  // se llamaba a findStayByPhone SIN carrera, así que con la caché fría y
+  // Cloudbeds lento el aviso de "no puede entrar" podía retrasarse varios
+  // segundos — ahora nunca espera más de GUEST_LOOKUP_TIMEOUT_MS.
   const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-  let stay = null;
+  let stays = []; // reservas del rango ganador: 0, 1, o varias si hay empate
+  let lookupTimedOut = false;
   try {
     if (phone !== 'no detectado') {
-      stay = await guestLookup.findStayByPhone(phone, todayISO);
+      const result = await withGuestLookupTimeout(guestLookup.findStaysByPhone(phone, todayISO));
+      if (result === GUEST_LOOKUP_TIMED_OUT) {
+        lookupTimedOut = true;
+      } else {
+        stays = result;
+      }
     }
   } catch (err) {
     console.error('[report-incident] Error consultando la estancia (no bloquea el aviso):', err.message);
   }
 
-  const stayLine = stay
-    ? `Reserva: ${stay.fullName || stay.firstName || '(sin nombre)'} · hab. ${stay.rooms ? stay.rooms.join(', ') : 'sin asignar'} · entrada ${stay.checkin || '?'} · salida ${stay.checkout || '?'} · canal ${stay.channel || '?'} · id ${stay.reservationId || '?'} · estado ${stay.status || '?'}`
-    : 'Reserva: no encontrada con este teléfono';
+  // Corrección del auditor (empate, 24-sep-2026): si hay más de una reserva
+  // en el rango ganador (p. ej. dos llegadas de hoy con el mismo teléfono),
+  // se listan TODAS (findStaysByPhone ya las recorta a 3 como mucho) en
+  // orden determinista, numeradas — nunca se elige una al azar. Si venció
+  // el plazo de 2,5s, no se afirma nada sobre la reserva.
+  const stayLine = lookupTimedOut
+    ? 'Reserva: no consultada a tiempo'
+    : !stays.length
+      ? 'Reserva: no encontrada con este teléfono'
+      : stays.length === 1
+        ? `Reserva: ${formatStayLine(stays[0])}`
+        : stays.map((s, i) => `Reserva ${i + 1}/${stays.length}: ${formatStayLine(s)}`).join('\n');
 
+  // Las reservas empatadas comparten SIEMPRE el mismo veredicto de urgencia
+  // (están en el mismo rango: o todas "llega hoy", o todas "alojado" — ver
+  // rankOf/isUrgentAccessIncident en src/guest-lookup.js y arriba), así que
+  // basta con mirar la primera. Si venció el plazo, no hay estancia con la
+  // que calcular la urgencia: nunca se marca urgente por esta vía (el
+  // huésped puede seguir describiéndolo como grave, pero eso no lo decide
+  // esta tool).
   const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
-  const urgent = category === 'acceso' && isUrgentAccessIncident(stay, todayISO, nowMurcia.getHours());
+  const urgent = !lookupTimedOut && category === 'acceso'
+    && isUrgentAccessIncident(stays[0] || null, todayISO, nowMurcia.getHours());
 
   const msg =
     (urgent ? '🚨 URGENTE — NO PUEDE ENTRAR\n' : '') +
@@ -496,7 +551,7 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
     `${stayLine}\n` +
     `Detalle: ${description}`;
 
-  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}`);
+  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}${lookupTimedOut ? ' | TIMEOUT' : ''}`);
 
   try {
     // Una incidencia de un huésped va al carril de alertas del grupo.
@@ -573,14 +628,17 @@ app.post('/vapi/get-weather', async (req, res) => {
 // El bot llama esto cuando necesita saber la fecha/hora actual
 //
 // V2a (24-sep-2026, docs/plan-mejora-voz-sep-2026.md): si el teléfono de
-// quien llama coincide con una llegada de hoy/mañana o un alojado de hoy en
-// Cloudbeds, se añade una frase con su reserva — nunca habitación, email,
-// teléfono ni importe (ver src/guest-lookup.js). Tope de GUEST_LOOKUP_TIMEOUT_MS:
-// si Cloudbeds tarda más, se responde sin esa línea (la consulta sigue en
-// segundo plano y alimenta la caché de 3 min para la siguiente tool call de
-// la misma llamada). No se toca el texto base de abajo.
-const GUEST_LOOKUP_TIMEOUT_MS = 2500;
-
+// quien llama coincide con una única llegada de hoy/mañana o un alojado de
+// hoy en Cloudbeds, se añade una frase con su reserva — nunca habitación,
+// email, teléfono ni importe (ver src/guest-lookup.js). Si el teléfono
+// coincide con VARIAS reservas del mismo rango (empate), findStayByPhone ya
+// devuelve null a propósito (ambigüedad = no revelar nada; ver corrección
+// del auditor en src/guest-lookup.js) y aquí no hace falta nada especial.
+// Tope de GUEST_LOOKUP_TIMEOUT_MS (definido arriba, compartido con
+// report_incident): si Cloudbeds tarda más, se responde sin esa línea (la
+// consulta sigue en segundo plano y alimenta la caché de 3 min para la
+// siguiente tool call de la misma llamada). No se toca el texto base de
+// abajo.
 app.post('/vapi/get-current-date', vapiAuth, async (req, res) => {
   const now = new Date();
   const murcia = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
@@ -615,11 +673,8 @@ app.post('/vapi/get-current-date', vapiAuth, async (req, res) => {
       // consulta nueva usa el método seguro ya usado en /vapi/get-availability
       // (toLocaleDateString('en-CA', ...)), sin tocar isoToday ni el texto base.
       const lookupTodayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-      const stay = await Promise.race([
-        guestLookup.findStayByPhone(callerPhone, lookupTodayISO),
-        new Promise((resolve) => setTimeout(() => resolve(null), GUEST_LOOKUP_TIMEOUT_MS)),
-      ]);
-      if (stay && stay.firstName && stay.checkin && stay.checkout) {
+      const stay = await withGuestLookupTimeout(guestLookup.findStayByPhone(callerPhone, lookupTodayISO));
+      if (stay && stay !== GUEST_LOOKUP_TIMED_OUT && stay.firstName && stay.checkin && stay.checkout) {
         reply += ` RESERVA DE QUIEN LLAMA: a nombre de ${stay.firstName}, entrada el ${spokenDate(stay.checkin)}, salida el ${spokenDate(stay.checkout)}.`;
       }
     }
