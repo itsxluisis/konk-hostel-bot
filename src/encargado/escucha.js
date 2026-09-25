@@ -15,7 +15,14 @@ const axios = require('axios');
 const temas = require('./temas');
 const { responder } = require('./cerebro');
 const acciones = require('./acciones');
-const { send } = require('../telegram');
+const reloj = require('./reloj');
+const { send, edit } = require('../telegram');
+
+// callback_data del botón "✅ Hecho" en los avisos "📞 LLAMAR" del resumen de
+// llamadas (src/server.js, end-of-call-report). Corto y fijo (≤ 64 bytes,
+// exigencia de Telegram); src/encargado/index.js lo expone vía
+// botonLlamadaHecho() para no duplicarlo en server.js.
+const LLAMADA_HECHO_DATA = 'llamada:hecho';
 
 let miUsuario = null;   // @nombre del bot, para detectar menciones
 
@@ -107,12 +114,62 @@ async function contestarBoton(id, aviso) {
 }
 
 /**
+ * ¿El aviso ya se marcó como hecho? Dos señales, cualquiera basta: ya no
+ * lleva teclado (una edición anterior lo quitó) o el texto ya trae la línea
+ * "✅ Hecho · ...". Sin esto, dos pulsaciones seguidas añadirían la línea
+ * dos veces.
+ */
+function yaMarcado(mensaje) {
+  const conTeclado = Boolean(mensaje?.reply_markup?.inline_keyboard?.length);
+  const conLinea = (mensaje?.text || '').includes('✅ Hecho · ');
+  return !conTeclado || conLinea;
+}
+
+/**
+ * Botón "✅ Hecho" de un aviso "📞 LLAMAR". No es una orden que cambie datos
+ * en Cloudbeds, es solo dejar constancia de que alguien ya atendió la
+ * llamada — así que, a diferencia de Confirmar/Cancelar, lo puede pulsar
+ * cualquier miembro del chat autorizado (TELEGRAM_CHAT_ID), no solo el jefe.
+ * Sin ese chat configurado, por seguridad no se acepta de ninguno (mismo
+ * criterio de "postura segura" que acciones.jefes()).
+ */
+async function procesarLlamadaHecha(cb) {
+  const permitido = String(process.env.TELEGRAM_CHAT_ID || '');
+  const chatId = cb.message?.chat?.id;
+  if (!permitido || String(chatId) !== permitido) {
+    await contestarBoton(cb.id, 'No autorizado');
+    return { accion: 'llamada-hecho-rechazado', chat: chatId };
+  }
+
+  if (yaMarcado(cb.message)) {
+    await contestarBoton(cb.id, 'Ya estaba marcado como hecho.');
+    return { accion: 'llamada-hecho-repetido' };
+  }
+
+  const nombre = cb.from?.first_name || cb.from?.username || 'alguien';
+  const hora = reloj.partes().hora;   // HH:MM hora de Madrid
+
+  await contestarBoton(cb.id, 'Marcado como hecho');
+  await edit(
+    cb.message.message_id,
+    `${cb.message.text || ''}\n\n✅ Hecho · ${nombre} · ${hora}`,
+    { keyboard: [] },
+  );
+  return { accion: 'llamada-hecho', quien: nombre };
+}
+
+/**
  * Alguien ha pulsado Confirmar o Cancelar.
  * El botón lo ve todo el grupo, pero solo el jefe manda: quien no lo sea
  * recibe un aviso discreto y no pasa nada más.
  */
 async function procesarBoton(cb) {
   apuntarQuien(cb.from);
+
+  // El botón "Hecho" de llamadas no es una acción del jefe: se resuelve
+  // ANTES de tocar acciones.esElJefe / el catálogo de propuestas.
+  if (cb.data === LLAMADA_HECHO_DATA) return procesarLlamadaHecha(cb);
+
   const [que, id] = String(cb.data || '').split(':');
   const hilo = cb.message?.message_thread_id || null;
 
@@ -294,5 +351,5 @@ function estadoSondeo() {
 
 module.exports = {
   procesar, registrar, estadoEscucha, vaConmigo, limpiar, AYUDA, quienEscribe,
-  arrancarSondeo, estadoSondeo,
+  arrancarSondeo, estadoSondeo, LLAMADA_HECHO_DATA,
 };

@@ -47,4 +47,17 @@ function hilo(clave) {
   }
 }
 
-module.exports = { montar, hilo };
+/**
+ * El teclado del botón "✅ Hecho" de los avisos "📞 LLAMAR". Mismo patrón
+ * defensivo que hilo(): si algo falla aquí, devuelve undefined y el aviso
+ * sale sin botón en vez de romper el envío a Telegram.
+ */
+function botonLlamadaHecho() {
+  try {
+    return [[{ text: '✅ Hecho', callback_data: require('./escucha').LLAMADA_HECHO_DATA }]];
+  } catch {
+    return undefined;
+  }
+}
+
+module.exports = { montar, hilo, botonLlamadaHecho };
