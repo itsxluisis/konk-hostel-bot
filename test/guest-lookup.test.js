@@ -91,9 +91,12 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     const guestID = g.guestID || `G${i}`;
     guestList[guestID] = {
       guestID,
-      guestName: `${g.first} ${g.last}`,
-      guestFirstName: g.first,
-      guestLastName: g.last,
+      // guestNameOnly: true simula un huésped cuyo único dato de nombre es
+      // el guestName combinado (sin guestFirstName/guestLastName por
+      // separado) — así se puede probar que se deriven bien del guestName.
+      guestName: g.guestName || `${g.first} ${g.last}`,
+      guestFirstName: g.guestNameOnly ? undefined : g.first,
+      guestLastName: g.guestNameOnly ? undefined : g.last,
       guestPhone: g.phone,
       guestCellPhone: g.cellPhone,
       guestEmail: g.email,
@@ -570,16 +573,36 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     assert.strictEqual(axiosCalls, 2, 'las dos búsquedas simultáneas debían compartir la misma carga (2 llamadas), no duplicarla (4)');
   });
 
-  console.log('\nresolveIncidentStay — búsqueda por NOMBRE (28-sep-2026: Booking deja de mandar el teléfono):\n');
+  console.log('\nresolveIncidentStay — búsqueda por NOMBRE, fuerte vs débil (corrección del auditor, 28-sep-2026, segunda vuelta):\n');
 
-  await t('coincidencia única por nombre (nombre + apellido, sin teléfono en el payload) → source:"name", stay definitivo', async () => {
+  await t('REGRESIÓN auditor 1: "Carlos del Bosque" NO coincide con la reserva de "Ana del Valle" (antes colaba: solo compartían la partícula "del")', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'BOSQUE', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Ana', last: 'del Valle', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Carlos del Bosque', hoy);
+    assert.strictEqual(r.source, 'none', 'el nombre de pila no coincide (Carlos ≠ Ana): nunca debía dar la reserva por buena');
+    assert.strictEqual(r.stay, null);
+  });
+
+  await t('REGRESIÓN auditor 2: "Pedro Gil Ruiz" NO coincide con la reserva de "Marta Gil Soto" (antes colaba: solo compartían el apellido "Gil", nunca se miraba el nombre de pila)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'GILSOTO', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Marta', last: 'Gil Soto', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Pedro Gil Ruiz', hoy);
+    assert.strictEqual(r.source, 'none', 'el nombre de pila no coincide (Pedro ≠ Marta): nunca debía dar la reserva por buena');
+    assert.strictEqual(r.stay, null);
+  });
+
+  await t('coincidencia FUERTE (nombre + apellido) → source:"name-strong", stay definitivo, cuenta nameMatches', async () => {
     const hoy = diaUnico();
     allReservations = [
       reserva({ id: 'N1', checkin: hoy, checkout: addDays(hoy, 2), guests: [{ guestID: 'g1', first: 'Carlos', last: 'Iglesias', isMainGuest: true }] }), // sin phone: Booking ya no lo manda
     ];
     const before = healthSnapshot();
     const r = await resolveIncidentStay(null, 'Carlos Iglesias', hoy);
-    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.source, 'name-strong');
     assert.ok(r.stay, 'debía encontrar exactamente una reserva por nombre');
     assert.strictEqual(r.stay.reservationId, 'N1');
     assert.strictEqual(r.tied.length, 0);
@@ -587,60 +610,109 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     assert.strictEqual(after.nameMatches, before.nameMatches + 1);
   });
 
-  await t('coincidencia solo por nombre de pila (sin apellido dado) también vale', async () => {
+  await t('"José Antonio García" (quien llama) contra guestName suelto "Jose A. Garcia Lopez" (sin guestFirstName/guestLastName; la inicial "A." se descarta) → fuerte', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'N2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Rebeca', last: 'Ortiz', isMainGuest: true }] }),
+      reserva({ id: 'JAG', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', guestName: 'Jose A. Garcia Lopez', guestNameOnly: true, isMainGuest: true }] }),
     ];
-    const r = await resolveIncidentStay(null, 'Rebeca', hoy);
-    assert.strictEqual(r.source, 'name');
-    assert.strictEqual(r.stay.reservationId, 'N2');
+    const r = await resolveIncidentStay(null, 'José Antonio García', hoy);
+    assert.strictEqual(r.source, 'name-strong');
+    assert.strictEqual(r.stay.reservationId, 'JAG');
   });
 
-  await t('nombre de pila coincide pero el APELLIDO dado NO coincide → no se da por bueno (regla "si hay apellido, que coincida también")', async () => {
-    const hoy = diaUnico();
-    allReservations = [
-      reserva({ id: 'N3', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Marcos', last: 'Peláez', isMainGuest: true }] }),
-    ];
-    const r = await resolveIncidentStay(null, 'Marcos Villanueva', hoy); // mismo nombre, apellido distinto
-    assert.strictEqual(r.source, 'none', 'el apellido no coincide: no debe darse la reserva por buena');
-    assert.strictEqual(r.stay, null);
-  });
-
-  await t('tildes y mayúsculas: "JOSÉ ÁNGEL MUÑOZ" (quien llama) coincide con "Jose Angel" / "Munoz" (Cloudbeds sin tildes)', async () => {
+  await t('tildes y mayúsculas: "JOSÉ ÁNGEL MUÑOZ" (quien llama) coincide con "Jose Angel" / "Munoz" (Cloudbeds sin tildes) → fuerte', async () => {
     const hoy = diaUnico();
     allReservations = [
       reserva({ id: 'N4', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Jose Angel', last: 'Munoz', isMainGuest: true }] }),
     ];
     const r = await resolveIncidentStay(null, 'JOSÉ ÁNGEL MUÑOZ', hoy);
-    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.source, 'name-strong');
     assert.strictEqual(r.stay.reservationId, 'N4');
   });
 
-  await t('tildes al revés: Cloudbeds SÍ trae tildes ("Muñoz") y quien llama las dice sin tildes ("Munoz")', async () => {
+  await t('tildes al revés: Cloudbeds SÍ trae tildes ("Muñoz") y quien llama las dice sin tildes ("Munoz") → fuerte', async () => {
     const hoy = diaUnico();
     allReservations = [
       reserva({ id: 'N4B', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'José', last: 'Muñoz', isMainGuest: true }] }),
     ];
     const r = await resolveIncidentStay(null, 'jose munoz', hoy);
-    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.source, 'name-strong');
     assert.strictEqual(r.stay.reservationId, 'N4B');
   });
 
-  await t('nombre ambiguo: coincide con VARIAS reservas → source:"name", stay:null, tied con las candidatas (orden determinista)', async () => {
+  await t('nombre de pila coincide pero el APELLIDO dado NO coincide → sin coincidencia (nunca cae a débil)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N3', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Marcos', last: 'Peláez', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Marcos Villanueva', hoy); // mismo nombre, apellido distinto
+    assert.strictEqual(r.source, 'none', 'el apellido no coincide: no debe darse la reserva por buena, ni como fuerte ni como débil');
+    assert.strictEqual(r.stay, null);
+  });
+
+  await t('nombre compuesto y apellido compuesto, con partículas de por medio ("María del Carmen" / "Rodríguez de la Torre") → fuerte', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'COMPUESTO', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'María del Carmen', last: 'Rodríguez de la Torre', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'María del Carmen Rodríguez de la Torre', hoy);
+    assert.strictEqual(r.source, 'name-strong');
+    assert.strictEqual(r.stay.reservationId, 'COMPUESTO');
+  });
+
+  console.log('\nresolveIncidentStay — coincidencia DÉBIL (solo nombre de pila, sin apellido dado):\n');
+
+  await t('"María" sola (sin apellido) con una ÚNICA María → source:"name-weak", cuenta nameMatches', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'M-UNICA', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'María', last: 'Sánchez', isMainGuest: true }] }),
+    ];
+    const before = healthSnapshot();
+    const r = await resolveIncidentStay(null, 'María', hoy);
+    assert.strictEqual(r.source, 'name-weak');
+    assert.strictEqual(r.stay.reservationId, 'M-UNICA');
+    const after = healthSnapshot();
+    assert.strictEqual(after.nameMatches, before.nameMatches + 1, 'una coincidencia débil también cuenta en nameMatches');
+  });
+
+  await t('"María" sola con DOS Marías → sin coincidencia (la ambigüedad débil no se lista como "varias posibles")', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'M-UNO', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'María', last: 'López', isMainGuest: true }] }),
+      reserva({ id: 'M-DOS', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'María', last: 'Ruiz', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'María', hoy);
+    assert.strictEqual(r.source, 'none', 'dos coincidencias débiles no bastan: se trata como si no hubiera ninguna');
+    assert.strictEqual(r.stay, null);
+    assert.strictEqual(r.tied.length, 0, 'a diferencia del empate fuerte, el ambiguo débil no se lista');
+  });
+
+  await t('coincidencia solo por nombre de pila con apellido REAL en la reserva: sigue siendo débil si quien llama no dio apellido', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Rebeca', last: 'Ortiz', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Rebeca', hoy);
+    assert.strictEqual(r.source, 'name-weak');
+    assert.strictEqual(r.stay.reservationId, 'N2');
+  });
+
+  console.log('\nresolveIncidentStay — ambigüedad FUERTE, generales y prioridad del teléfono:\n');
+
+  await t('varias reservas con coincidencia FUERTE → source:"name-strong", stay:null, tied con las candidatas (orden determinista)', async () => {
     const hoy = diaUnico();
     allReservations = [
       reserva({ id: 'AMB-Z', checkin: addDays(hoy, 1), checkout: addDays(hoy, 3), guests: [{ guestID: 'g1', first: 'Elena', last: 'García', isMainGuest: true }] }),
       reserva({ id: 'AMB-A', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Elena', last: 'García', isMainGuest: true }] }),
     ];
     const r = await resolveIncidentStay(null, 'Elena García', hoy);
-    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.source, 'name-strong');
     assert.strictEqual(r.stay, null, 'con varias reservas posibles no se elige ninguna');
     assert.strictEqual(r.tied.length, 2);
     assert.deepStrictEqual(r.tied.map(s => s.reservationId), ['AMB-A', 'AMB-Z'], 'orden determinista por fecha de entrada, luego id');
   });
 
-  await t('nombre ambiguo con más de 3 posibles: se recorta a MAX_TIE_CANDIDATES (3)', async () => {
+  await t('ambigüedad fuerte con más de 3 posibles: se recorta a MAX_TIE_CANDIDATES (3)', async () => {
     const hoy = diaUnico();
     allReservations = [
       reserva({ id: 'M4', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Luis', last: 'Fernández', isMainGuest: true }] }),
@@ -649,6 +721,7 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
       reserva({ id: 'M3', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Luis', last: 'Fernández', isMainGuest: true }] }),
     ];
     const r = await resolveIncidentStay(null, 'Luis Fernández', hoy);
+    assert.strictEqual(r.source, 'name-strong');
     assert.strictEqual(r.tied.length, 3);
     assert.deepStrictEqual(r.tied.map(s => s.reservationId), ['M1', 'M2', 'M3']);
   });
@@ -675,13 +748,24 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     assert.strictEqual(r2.source, 'none');
   });
 
-  await t('tokens cortos (< 3 letras) no cuentan: "Al" no basta para buscar por nombre', async () => {
+  await t('inicial con punto ("A.") no cuenta como token, sea cual sea su longitud tras quitarle el punto: no basta para buscar por nombre', async () => {
     const hoy = diaUnico();
     allReservations = [
-      reserva({ id: 'N7', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Alba', last: 'Rey', isMainGuest: true }] }),
+      reserva({ id: 'N7', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Antonio', last: 'Ramos', isMainGuest: true }] }),
     ];
-    const r = await resolveIncidentStay(null, 'Al', hoy); // token de 2 letras, se descarta
-    assert.strictEqual(r.source, 'none', '"Al" (2 letras) no debe bastar para intentar la búsqueda por nombre');
+    axiosCalls = 0;
+    const r = await resolveIncidentStay(null, 'A.', hoy);
+    assert.strictEqual(r.source, 'none', 'una inicial sola no debe bastar para intentar la búsqueda por nombre');
+    assert.strictEqual(axiosCalls, 0, 'sin teléfono y sin ningún token de nombre utilizable, no debía tocar Cloudbeds');
+  });
+
+  await t('partículas sueltas ("de", "la", "san"...) no cuentan como nombre de pila por sí solas', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N7B', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Santiago', last: 'De la Fuente', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'de la', hoy); // solo partículas, nada significativo
+    assert.strictEqual(r.source, 'none');
   });
 
   await t('EL TELÉFONO TIENE PRIORIDAD SOBRE EL NOMBRE: si el teléfono encuentra una reserva, nunca se intenta el nombre (aunque el nombre coincidiría con OTRA reserva distinta)', async () => {
@@ -709,13 +793,13 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     assert.strictEqual(r.tied.length, 2);
   });
 
-  await t('sin teléfono en absoluto (null): cae directo al nombre', async () => {
+  await t('sin teléfono en absoluto (null): cae directo al nombre (fuerte, porque se da apellido)', async () => {
     const hoy = diaUnico();
     allReservations = [
       reserva({ id: 'N8', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Teo', last: 'Casas', isMainGuest: true }] }),
     ];
     const r = await resolveIncidentStay(null, 'Teo Casas', hoy);
-    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.source, 'name-strong');
     assert.strictEqual(r.stay.reservationId, 'N8');
   });
 
@@ -726,7 +810,7 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     ];
     axiosCalls = 0;
     const r = await resolveIncidentStay('+34600999888', 'Nuria Campos', hoy); // teléfono no coincide con nadie → cae a nombre
-    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.source, 'name-strong');
     assert.strictEqual(r.stay.reservationId, 'N9');
     // 2 llamadas reales (llegadas + alojados, 1 página cada una) para TODO
     // el proceso: el intento por teléfono puebla la caché y el de nombre la

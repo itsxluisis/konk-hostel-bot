@@ -469,79 +469,133 @@ async function findStaysByPhone(phone, todayISO, { max = MAX_TIE_CANDIDATES } = 
 // ha pedido el nombre) intenta entonces por NOMBRE (args.guest_name, que el
 // bot ya pregunta antes de llamar a la tool) entre las MISMAS candidatas
 // (mismo fetchCandidates, mismo caché — sin repaginar Cloudbeds aparte).
-const NAME_TOKEN_MIN_LEN = 3;
+//
+// Corrección del auditor (28-sep-2026, segunda vuelta): el primer diseño
+// comparaba "cualquier token significativo" contra un totum revolutum de
+// tokens de la reserva, sin exigir nunca que el NOMBRE DE PILA coincidiera
+// — "Carlos del Bosque" colaba como coincidencia de la reserva "Ana del
+// Valle" (solo comparten la partícula "del") y "Pedro Gil Ruiz" con "Marta
+// Gil Soto" (solo comparten "Gil", un apellido cualquiera). Rediseño: el
+// nombre de pila (primer token significativo de quien llama) tiene que
+// coincidir SIEMPRE con el nombre de pila de un huésped concreto; solo
+// entonces, si quien llama dio apellido, se comprueba el apellido de ESE
+// MISMO huésped. Nunca basta con una palabra suelta compartida, sea cual
+// sea, ni con coincidir solo por apellido.
+const NAME_TOKEN_MIN_LEN = 2;
 
-// minúsculas, sin tildes/diacríticos, sin signos — solo letras/dígitos y
-// espacios; NFD + quitar marcas combinantes es el método estándar en JS
-// para quitar acentos sin tabla propia.
-function normalizeNameForMatch(s) {
-  if (typeof s !== 'string') return '';
-  return s
-    .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+// Partículas de nombres/apellidos compuestos: por sí solas no identifican a
+// nadie (medio mundo comparte "del"/"de"/"la" en un apellido compuesto).
+const NAME_PARTICLES = new Set([
+  'de', 'del', 'la', 'las', 'los', 'el', 'y', 'e',
+  'da', 'das', 'do', 'dos', 'di', 'van', 'von', 'der', 'san', 'santa',
+]);
+
+// Tokens "significativos" de un nombre: minúsculas, sin tildes/diacríticos
+// (NFD + quitar marcas combinantes, método estándar en JS sin tabla
+// propia). Se descarta CUALQUIER trozo que en el original llevara un punto
+// (inicial tipo "A." o "Ma." — una abreviatura no identifica a nadie por sí
+// sola, tenga la longitud que tenga tras quitarle el punto), cualquier
+// signo suelto, los tokens de menos de NAME_TOKEN_MIN_LEN letras, y las
+// partículas de NAME_PARTICLES.
+function significantNameTokens(s) {
+  if (typeof s !== 'string') return [];
+  const lower = s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return lower
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(piece => !piece.includes('.')) // inicial con punto ("A.", "Ma."): fuera, sea cual sea su longitud
+    .map(piece => piece.replace(/[^a-z0-9]/g, ''))
+    .filter(t => t.length >= NAME_TOKEN_MIN_LEN)
+    .filter(t => !NAME_PARTICLES.has(t));
 }
 
-function tokensOf(s) {
-  const n = normalizeNameForMatch(s);
-  return n ? n.split(' ') : [];
-}
-
-// Todos los tokens de nombre de una reserva: guestName de la reserva +
-// guestFirstName/guestLastName/guestName de TODOS los huéspedes de
-// guestList (sea o no isMainGuest — cualquiera de ellos identifica la
-// reserva igual de bien a efectos de nombre).
-function reservationNameTokens(r) {
-  const tokens = new Set();
-  const addAll = (s) => tokensOf(s).forEach(t => tokens.add(t));
-  addAll(r.guestName);
-  for (const g of guestListOf(r)) {
-    addAll(g.guestFirstName);
-    addAll(g.guestLastName);
-    addAll(g.guestName);
+// Nombre de pila (primer token significativo) de un huésped/pseudo-huésped:
+// guestFirstName si lo trae, si no el primer token significativo de
+// guestName.
+function firstNameTokenOf(g) {
+  if (g.guestFirstName) {
+    const t = significantNameTokens(g.guestFirstName);
+    if (t.length) return t[0];
   }
-  return tokens;
+  if (g.guestName) {
+    const t = significantNameTokens(g.guestName);
+    if (t.length) return t[0];
+  }
+  return null;
 }
 
-// Exige al menos un token de 3+ letras del nombre de quien llama que
-// coincida con algún token de la reserva y, si el nombre de quien llama
-// trae más de un token significativo (se asume: primero = nombre de pila,
-// resto = apellido/s), que al menos uno de esos tokens "de apellido"
-// coincida también — un solo nombre de pila suelto (sin apellido) NO basta
-// por sí solo si el que llama SÍ dio apellido y ese apellido no aparece.
-function callerNameMatches(callerTokens, reservationTokens) {
-  const significant = callerTokens.filter(t => t.length >= NAME_TOKEN_MIN_LEN);
-  if (!significant.length) return false;
-  if (!significant.some(t => reservationTokens.has(t))) return false;
-  const apellidoTokens = significant.slice(1);
-  if (apellidoTokens.length && !apellidoTokens.some(t => reservationTokens.has(t))) return false;
-  return true;
+// Tokens de apellido de un huésped/pseudo-huésped: guestLastName si lo
+// trae, si no el resto de tokens significativos de guestName (todos menos
+// el primero, que ya se cuenta como nombre de pila).
+function lastNameTokensOf(g) {
+  if (g.guestLastName) return significantNameTokens(g.guestLastName);
+  if (g.guestName) return significantNameTokens(g.guestName).slice(1);
+  return [];
+}
+
+// Todos los "huéspedes" a comprobar de una reserva: cada huésped real de
+// guestList (sea o no isMainGuest) MÁS un pseudo-huésped a partir del
+// guestName de la RESERVA (si lo trae) — el guestName de la reserva no
+// siempre coincide exactamente con ningún huésped de guestList.
+function nameCandidatesOf(r) {
+  const list = guestListOf(r).slice();
+  if (r.guestName) list.push({ guestFirstName: null, guestLastName: null, guestName: r.guestName });
+  return list;
+}
+
+// 'strong': el nombre de pila de quien llama coincide con el de algún
+// huésped Y (si quien llama dio apellido) al menos un apellido dado
+// coincide con el apellido de ESE MISMO huésped. 'weak': quien llama SOLO
+// dio nombre de pila (sin apellido que comprobar) y coincide con el nombre
+// de pila de algún huésped. null si ninguno. El nombre de pila es SIEMPRE
+// obligatorio: nunca se compara solo por apellido.
+function reservationMatchKind(r, callerFirst, callerLastTokens, hasSurname) {
+  for (const g of nameCandidatesOf(r)) {
+    const gFirst = firstNameTokenOf(g);
+    if (!gFirst || gFirst !== callerFirst) continue;
+    if (!hasSurname) return 'weak';
+    const gLast = lastNameTokensOf(g);
+    if (callerLastTokens.some(t => gLast.includes(t))) return 'strong';
+  }
+  return null;
 }
 
 // Candidatas (incluye TODOS los rangos: llega hoy/mañana y alojados — a
 // diferencia de resolveWinningMatches, aquí no se recorta a un solo rango
 // "ganador": el nombre no tiene ese concepto de prioridad por fecha) cuyo
-// nombre coincide con `guestName`. Orden determinista (mismo criterio que
-// las coincidencias por teléfono). Nunca lanza: cualquier fallo de
-// Cloudbeds se loguea y se trata como "sin candidatas".
+// nombre coincide con `guestName`, separadas en fuertes (nombre + apellido)
+// y débiles (solo nombre de pila, porque quien llama no dio apellido).
+// Orden determinista (mismo criterio que las coincidencias por teléfono).
+// Nunca lanza: cualquier fallo de Cloudbeds se loguea y se trata como "sin
+// candidatas".
 async function resolveNameMatches(guestName, todayISO) {
-  if (!guestName || typeof guestName !== 'string' || typeof todayISO !== 'string') return [];
-  const callerTokens = tokensOf(guestName);
-  if (!callerTokens.some(t => t.length >= NAME_TOKEN_MIN_LEN)) return [];
+  if (!guestName || typeof guestName !== 'string' || typeof todayISO !== 'string') {
+    return { strong: [], weak: [] };
+  }
+  const callerTokens = significantNameTokens(guestName);
+  if (!callerTokens.length) return { strong: [], weak: [] };
+  const callerFirst = callerTokens[0];
+  const callerLastTokens = callerTokens.slice(1);
+  const hasSurname = callerLastTokens.length > 0;
 
   try {
     const tomorrowISO = addDaysISO(todayISO, 1);
     const candidates = await fetchCandidates(todayISO, tomorrowISO);
-    return candidates
-      .filter(r => callerNameMatches(callerTokens, reservationNameTokens(r)))
-      .sort(compareForOrder);
+    const strong = [];
+    const weak = [];
+    for (const r of candidates) {
+      const kind = reservationMatchKind(r, callerFirst, callerLastTokens, hasSurname);
+      if (kind === 'strong') strong.push(r);
+      else if (kind === 'weak') weak.push(r);
+    }
+    strong.sort(compareForOrder);
+    weak.sort(compareForOrder);
+    return { strong, weak };
   } catch (err) {
     counters.errors++;
     counters.lastAt = new Date().toISOString();
     console.error('[guest-lookup] Error consultando Cloudbeds (búsqueda por nombre):', err.message);
-    return [];
+    return { strong: [], weak: [] };
   }
 }
 
@@ -556,14 +610,25 @@ async function resolveNameMatches(guestName, todayISO) {
  * intento por nombre no vuelve a tocar la red salvo que el intento por
  * teléfono ya hubiera fallado).
  *
+ * Dos niveles de confianza por nombre (corrección del auditor, 28-sep-2026
+ * segunda vuelta):
+ *  - 'name-strong': nombre de pila Y apellido coinciden con el mismo
+ *    huésped. Única → se usa y SÍ cuenta para la urgencia. Varias → "varias
+ *    posibles" (hasta MAX_TIE_CANDIDATES), sin urgencia.
+ *  - 'name-weak': quien llama solo dio el nombre de pila (sin apellido) y
+ *    coincide con el de un único huésped. Se usa, pero NUNCA cuenta para
+ *    la urgencia (evidencia demasiado débil). Si coincide con más de un
+ *    huésped, es demasiado débil incluso para listar "varias posibles": se
+ *    trata como si no hubiera ninguna coincidencia.
+ *
  * @param {string} phone
  * @param {string} guestName  args.guest_name tal cual lo manda la tool (sin
  *   el "no indicado" por defecto que pone server.js para el aviso).
  * @param {string} todayISO
- * @returns {Promise<{source: 'phone'|'name'|'none', stay: object|null, tied: object[]}>}
- *   `stay` solo si hay EXACTAMENTE una reserva definitiva (por teléfono o
- *   por nombre); `tied` con 2 o más candidatas ambiguas (máx.
- *   MAX_TIE_CANDIDATES), sea por empate de teléfono o por nombre ambiguo.
+ * @returns {Promise<{source:'phone'|'name-strong'|'name-weak'|'none', stay:object|null, tied:object[]}>}
+ *   `stay` solo si hay EXACTAMENTE una reserva definitiva; `tied` con 2 o
+ *   más candidatas ambiguas (máx. MAX_TIE_CANDIDATES), sea por empate de
+ *   teléfono o por nombre fuerte ambiguo (el débil ambiguo no se lista).
  */
 async function resolveIncidentStay(phone, guestName, todayISO) {
   const phoneWinning = await resolveWinningMatches(phone, todayISO);
@@ -576,15 +641,22 @@ async function resolveIncidentStay(phone, guestName, todayISO) {
 
   // phoneWinning.length === 0: sin teléfono, o teléfono sin ninguna
   // coincidencia — se intenta por nombre.
-  const nameMatches = await resolveNameMatches(guestName, todayISO);
-  if (nameMatches.length === 1) {
+  const { strong, weak } = await resolveNameMatches(guestName, todayISO);
+  if (strong.length === 1) {
     counters.nameMatches++;
     counters.lastAt = new Date().toISOString();
-    return { source: 'name', stay: toStay(nameMatches[0]), tied: [] };
+    return { source: 'name-strong', stay: toStay(strong[0]), tied: [] };
   }
-  if (nameMatches.length > 1) {
-    return { source: 'name', stay: null, tied: nameMatches.slice(0, MAX_TIE_CANDIDATES).map(toStay) };
+  if (strong.length > 1) {
+    return { source: 'name-strong', stay: null, tied: strong.slice(0, MAX_TIE_CANDIDATES).map(toStay) };
   }
+  if (weak.length === 1) {
+    counters.nameMatches++;
+    counters.lastAt = new Date().toISOString();
+    return { source: 'name-weak', stay: toStay(weak[0]), tied: [] };
+  }
+  // weak.length === 0 (nada) o > 1 (ambiguo Y débil: demasiado poco fiable
+  // para listar "varias posibles" — se trata como sin coincidencia).
   return { source: 'none', stay: null, tied: [] };
 }
 

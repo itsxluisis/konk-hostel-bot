@@ -441,6 +441,27 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     }
   });
 
+  await t('corrección del auditor (28-sep-2026, segunda vuelta): coincidencia DÉBIL (solo nombre de pila) en report_incident → "Reserva posible (solo nombre de pila, verificar)" y NUNCA urgente, aunque la reserva esté alojada', async () => {
+    allReservations = [
+      // Alojada (checkin ayer, checkout en 5 días): por teléfono o por
+      // nombre FUERTE sería urgente sin depender de la hora — el caso más
+      // exigente para probar que la coincidencia débil NO dispara 🚨.
+      reserva({ id: 'DEBIL-ALOJADA', checkin: AYER, checkout: EN_5_DIAS, channel: 'Booking.com', guests: [{ guestID: 'g1', first: 'Fernanda', last: 'Quiroga Beltrán', isMainGuest: true }] }),
+    ];
+    const restoreClock = forceFreshCloudbedsFetch();
+    try {
+      telegramCalls.length = 0;
+      const r = await callReportIncident({ phone: '+34699222666', guest_name: 'Fernanda', category: 'acceso', description: 'no puede abrir' }); // SOLO nombre de pila, sin apellido
+      assert.strictEqual(r.status, 200);
+      const texto = telegramCalls[0].text;
+      assert.ok(texto.includes('Reserva posible (solo nombre de pila, verificar): Fernanda Quiroga Beltrán'), `debía marcarla como coincidencia débil: ${texto}`);
+      assert.ok(!texto.includes('coincidencia por nombre, verificar):'), 'no debe usar la redacción de la coincidencia fuerte');
+      assert.ok(!texto.startsWith('🚨'), 'una coincidencia débil nunca debe disparar el aviso urgente, aunque la reserva esté alojada');
+    } finally {
+      restoreClock();
+    }
+  });
+
   console.log('\nEmpate real extremo a extremo (condición del auditor, 24-sep-2026) · último caso, va al final\n');
 
   await t('empate real: get_current_date NO añade la línea (ambigüedad) y report_incident lista las DOS en el aviso, en orden determinista', async () => {

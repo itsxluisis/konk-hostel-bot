@@ -452,8 +452,12 @@ function formatStayLine(stay) {
 // guestLookup.resolveIncidentStay() — 28-sep-2026 (dato de Luis): Booking
 // (72-83 % de las reservas del Konk) deja de mandar el teléfono del
 // huésped, así que a partir de esa fecha la mayoría de los avisos llegarán
-// aquí por 'name', no por 'phone'. `stays` es el array que ya construye el
-// handler (1 elemento si es definitiva, 2-3 si hay ambigüedad).
+// aquí por nombre, no por teléfono. `stays` es el array que ya construye el
+// handler (1 elemento si es definitiva, 2-3 si hay ambigüedad — nunca en
+// 'name-weak', que si es ambiguo se trata como 'none', ver
+// resolveIncidentStay). Corrección del auditor (28-sep-2026, segunda
+// vuelta): 'name-strong' (nombre + apellido) y 'name-weak' (solo nombre de
+// pila, evidencia más floja) llevan avisos distintos a propósito.
 function buildStayLine(matchSource, stays) {
   if (matchSource === 'none' || !stays.length) return 'Reserva: no encontrada';
   if (matchSource === 'phone') {
@@ -461,8 +465,13 @@ function buildStayLine(matchSource, stays) {
       ? `Reserva: ${formatStayLine(stays[0])}`
       : stays.map((s, i) => `Reserva ${i + 1}/${stays.length}: ${formatStayLine(s)}`).join('\n');
   }
-  // matchSource === 'name': se marca SIEMPRE "verificar" — es una
-  // coincidencia por nombre, no por teléfono, más débil por diseño.
+  if (matchSource === 'name-weak') {
+    // Solo llega aquí con exactamente 1 (el debate ambiguo ya es 'none').
+    return `Reserva posible (solo nombre de pila, verificar): ${formatStayLine(stays[0])}`;
+  }
+  // matchSource === 'name-strong': nombre Y apellido coinciden — se marca
+  // "verificar" igualmente (sigue sin ser un teléfono), pero es más fiable
+  // que 'name-weak' y SÍ cuenta para la urgencia (ver isUrgentAccessIncident abajo).
   return stays.length === 1
     ? `Reserva (coincidencia por nombre, verificar): ${formatStayLine(stays[0])}`
     : `Reserva: varias posibles (coincidencia por nombre, verificar):\n`
@@ -529,8 +538,8 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
   // resolveIncidentStay prueba por nombre (args.guest_name, entre las
   // MISMAS candidatas) cuando el teléfono no aparece o no encuentra nada.
   const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-  let stays = [];            // 1 = definitiva; 2-3 = ambigua (empate o varios nombres posibles); 0 = nada
-  let matchSource = 'none';  // 'phone' | 'name' | 'none'
+  let stays = [];            // 1 = definitiva; 2-3 = ambigua (empate o varios nombres fuertes posibles); 0 = nada
+  let matchSource = 'none';  // 'phone' | 'name-strong' | 'name-weak' | 'none'
   let lookupTimedOut = false;
   try {
     // 'no detectado' es un sentinel de ESTE archivo (para phoneLabel); no
@@ -554,14 +563,20 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
   // se afirma nada sobre la reserva.
   const stayLine = lookupTimedOut ? 'Reserva: no consultada a tiempo' : buildStayLine(matchSource, stays);
 
-  // Urgencia solo si hay una reserva DEFINITIVA con la que calcularla: por
-  // teléfono, incluso empatada (todas las empatadas comparten rango —
-  // "llega hoy" o "alojado" — luego comparten veredicto, basta con mirar la
-  // primera); por nombre, SOLO si es la única encontrada (varias posibles
-  // por nombre pueden estar en rangos distintos, sin veredicto común). Si
-  // venció el plazo, no hay estancia con la que calcular nada.
+  // Urgencia solo si hay una reserva DEFINITIVA y suficientemente fiable
+  // con la que calcularla: por teléfono, incluso empatada (todas las
+  // empatadas comparten rango — "llega hoy" o "alojado" — luego comparten
+  // veredicto, basta con mirar la primera); por nombre FUERTE (nombre +
+  // apellido) SOLO si es la única encontrada (varias posibles pueden estar
+  // en rangos distintos, sin veredicto común); por nombre DÉBIL (solo
+  // nombre de pila) NUNCA — corrección del auditor (28-sep-2026, segunda
+  // vuelta): esa evidencia es demasiado floja para disparar un aviso
+  // urgente. Si venció el plazo, no hay estancia con la que calcular nada.
   const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
-  const canComputeUrgency = stays.length >= 1 && (matchSource === 'phone' || stays.length === 1);
+  const canComputeUrgency = stays.length >= 1 && (
+    matchSource === 'phone' ||                            // por teléfono: cualquier recuento (mismo rango, mismo veredicto)
+    (matchSource === 'name-strong' && stays.length === 1)  // por nombre: solo si es fuerte y única
+  );
   const urgent = !lookupTimedOut && category === 'acceso' && canComputeUrgency
     && isUrgentAccessIncident(stays[0], todayISO, nowMurcia.getHours());
 
@@ -574,7 +589,8 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
     `${stayLine}\n` +
     `Detalle: ${description}`;
 
-  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}${lookupTimedOut ? ' | TIMEOUT' : ''}${matchSource === 'name' ? ' | POR NOMBRE' : ''}`);
+  const matchTag = matchSource === 'name-strong' ? ' | POR NOMBRE (fuerte)' : matchSource === 'name-weak' ? ' | POR NOMBRE (débil)' : '';
+  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}${lookupTimedOut ? ' | TIMEOUT' : ''}${matchTag}`);
 
   try {
     // Una incidencia de un huésped va al carril de alertas del grupo.
