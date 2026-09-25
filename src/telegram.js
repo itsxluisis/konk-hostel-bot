@@ -40,15 +40,26 @@ async function send(text, opts = {}) {
   }
 }
 
-/** Reescribe un mensaje ya enviado (para el ESTADO fijado). */
-async function edit(messageId, text) {
+/**
+ * Reescribe un mensaje ya enviado (para el ESTADO fijado, o para marcar
+ * como hecho un aviso de llamar).
+ * @param {number|string} messageId
+ * @param {string} text
+ * @param {object} [opts]
+ * @param {Array|null} [opts.keyboard]  Nuevo inline_keyboard. Si no se pasa,
+ *                                      Telegram deja el teclado como estaba;
+ *                                      `[]` o `null` lo quita del todo.
+ */
+async function edit(messageId, text, opts = {}) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId || !messageId) return null;
+  const payload = { chat_id: chatId, message_id: Number(messageId), text };
+  if (opts.keyboard !== undefined) payload.reply_markup = { inline_keyboard: opts.keyboard || [] };
   try {
     const { data } = await axios.post(
       `https://api.telegram.org/bot${token}/editMessageText`,
-      { chat_id: chatId, message_id: Number(messageId), text }
+      payload
     );
     return data && data.result ? data.result : null;
   } catch (err) {
