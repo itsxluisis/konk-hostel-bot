@@ -56,7 +56,7 @@ process.env.CLOUDBEDS_CLIENT_ID = 'test-client';
 process.env.CLOUDBEDS_CLIENT_SECRET = 'test-secret';
 
 const cloudbeds = realRequire.call(module, path.join(__dirname, '../src/cloudbeds.js'));
-const { findStayByPhone, findStaysByPhone, normalizePhone, phonesMatch, healthSnapshot } = realRequire.call(module, path.join(__dirname, '../src/guest-lookup.js'));
+const { findStayByPhone, findStaysByPhone, resolveIncidentStay, normalizePhone, phonesMatch, healthSnapshot } = realRequire.call(module, path.join(__dirname, '../src/guest-lookup.js'));
 
 let pasan = 0, fallan = 0;
 async function t(nombre, fn) {
@@ -568,6 +568,183 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     // comparten la promesa en vuelo: 2 llamadas a axios en total. Si la
     // duplicaran (sin compartir): 4.
     assert.strictEqual(axiosCalls, 2, 'las dos búsquedas simultáneas debían compartir la misma carga (2 llamadas), no duplicarla (4)');
+  });
+
+  console.log('\nresolveIncidentStay — búsqueda por NOMBRE (28-sep-2026: Booking deja de mandar el teléfono):\n');
+
+  await t('coincidencia única por nombre (nombre + apellido, sin teléfono en el payload) → source:"name", stay definitivo', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N1', checkin: hoy, checkout: addDays(hoy, 2), guests: [{ guestID: 'g1', first: 'Carlos', last: 'Iglesias', isMainGuest: true }] }), // sin phone: Booking ya no lo manda
+    ];
+    const before = healthSnapshot();
+    const r = await resolveIncidentStay(null, 'Carlos Iglesias', hoy);
+    assert.strictEqual(r.source, 'name');
+    assert.ok(r.stay, 'debía encontrar exactamente una reserva por nombre');
+    assert.strictEqual(r.stay.reservationId, 'N1');
+    assert.strictEqual(r.tied.length, 0);
+    const after = healthSnapshot();
+    assert.strictEqual(after.nameMatches, before.nameMatches + 1);
+  });
+
+  await t('coincidencia solo por nombre de pila (sin apellido dado) también vale', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Rebeca', last: 'Ortiz', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Rebeca', hoy);
+    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.stay.reservationId, 'N2');
+  });
+
+  await t('nombre de pila coincide pero el APELLIDO dado NO coincide → no se da por bueno (regla "si hay apellido, que coincida también")', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N3', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Marcos', last: 'Peláez', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Marcos Villanueva', hoy); // mismo nombre, apellido distinto
+    assert.strictEqual(r.source, 'none', 'el apellido no coincide: no debe darse la reserva por buena');
+    assert.strictEqual(r.stay, null);
+  });
+
+  await t('tildes y mayúsculas: "JOSÉ ÁNGEL MUÑOZ" (quien llama) coincide con "Jose Angel" / "Munoz" (Cloudbeds sin tildes)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N4', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Jose Angel', last: 'Munoz', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'JOSÉ ÁNGEL MUÑOZ', hoy);
+    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.stay.reservationId, 'N4');
+  });
+
+  await t('tildes al revés: Cloudbeds SÍ trae tildes ("Muñoz") y quien llama las dice sin tildes ("Munoz")', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N4B', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'José', last: 'Muñoz', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'jose munoz', hoy);
+    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.stay.reservationId, 'N4B');
+  });
+
+  await t('nombre ambiguo: coincide con VARIAS reservas → source:"name", stay:null, tied con las candidatas (orden determinista)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'AMB-Z', checkin: addDays(hoy, 1), checkout: addDays(hoy, 3), guests: [{ guestID: 'g1', first: 'Elena', last: 'García', isMainGuest: true }] }),
+      reserva({ id: 'AMB-A', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Elena', last: 'García', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Elena García', hoy);
+    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.stay, null, 'con varias reservas posibles no se elige ninguna');
+    assert.strictEqual(r.tied.length, 2);
+    assert.deepStrictEqual(r.tied.map(s => s.reservationId), ['AMB-A', 'AMB-Z'], 'orden determinista por fecha de entrada, luego id');
+  });
+
+  await t('nombre ambiguo con más de 3 posibles: se recorta a MAX_TIE_CANDIDATES (3)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'M4', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Luis', last: 'Fernández', isMainGuest: true }] }),
+      reserva({ id: 'M2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Luis', last: 'Fernández', isMainGuest: true }] }),
+      reserva({ id: 'M1', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Luis', last: 'Fernández', isMainGuest: true }] }),
+      reserva({ id: 'M3', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Luis', last: 'Fernández', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Luis Fernández', hoy);
+    assert.strictEqual(r.tied.length, 3);
+    assert.deepStrictEqual(r.tied.map(s => s.reservationId), ['M1', 'M2', 'M3']);
+  });
+
+  await t('nombre sin ninguna coincidencia → source:"none"', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N5', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Patricia', last: 'Salas', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Ricardo Montenegro', hoy);
+    assert.strictEqual(r.source, 'none');
+    assert.strictEqual(r.stay, null);
+    assert.strictEqual(r.tied.length, 0);
+  });
+
+  await t('sin guest_name (undefined/vacío) y sin teléfono → source:"none", sin tocar Cloudbeds para el nombre (nada que buscar)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N6', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Ana', last: 'Bravo', isMainGuest: true }] }),
+    ];
+    const r1 = await resolveIncidentStay(null, undefined, hoy);
+    assert.strictEqual(r1.source, 'none');
+    const r2 = await resolveIncidentStay(null, '', hoy);
+    assert.strictEqual(r2.source, 'none');
+  });
+
+  await t('tokens cortos (< 3 letras) no cuentan: "Al" no basta para buscar por nombre', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N7', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Alba', last: 'Rey', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Al', hoy); // token de 2 letras, se descarta
+    assert.strictEqual(r.source, 'none', '"Al" (2 letras) no debe bastar para intentar la búsqueda por nombre');
+  });
+
+  await t('EL TELÉFONO TIENE PRIORIDAD SOBRE EL NOMBRE: si el teléfono encuentra una reserva, nunca se intenta el nombre (aunque el nombre coincidiría con OTRA reserva distinta)', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'POR-TELEFONO', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Sara', last: 'Duque', phone: '+34611777888', isMainGuest: true }] }),
+      reserva({ id: 'POR-NOMBRE', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Otra', last: 'Persona Distinta', isMainGuest: true }] }),
+    ];
+    // guest_name coincide con la reserva "POR-NOMBRE", pero el teléfono
+    // coincide con "POR-TELEFONO": debe ganar el teléfono.
+    const r = await resolveIncidentStay('+34611777888', 'Otra Persona Distinta', hoy);
+    assert.strictEqual(r.source, 'phone');
+    assert.strictEqual(r.stay.reservationId, 'POR-TELEFONO');
+  });
+
+  await t('el teléfono empatado (varias reservas) tampoco cae al nombre: sigue siendo "phone" (ambiguo), no se prueba el nombre', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'TEL-EMP-1', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Uno', last: 'X', phone: '+34611888999', isMainGuest: true }] }),
+      reserva({ id: 'TEL-EMP-2', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Dos', last: 'Y', phone: '+34611888999', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay('+34611888999', 'Nombre Que No Aparece', hoy);
+    assert.strictEqual(r.source, 'phone');
+    assert.strictEqual(r.stay, null);
+    assert.strictEqual(r.tied.length, 2);
+  });
+
+  await t('sin teléfono en absoluto (null): cae directo al nombre', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N8', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Teo', last: 'Casas', isMainGuest: true }] }),
+    ];
+    const r = await resolveIncidentStay(null, 'Teo Casas', hoy);
+    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.stay.reservationId, 'N8');
+  });
+
+  await t('reutiliza las MISMAS candidatas que el teléfono: la búsqueda por nombre no vuelve a paginar Cloudbeds aparte', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({ id: 'N9', checkin: hoy, checkout: addDays(hoy, 1), guests: [{ guestID: 'g1', first: 'Nuria', last: 'Campos', isMainGuest: true }] }),
+    ];
+    axiosCalls = 0;
+    const r = await resolveIncidentStay('+34600999888', 'Nuria Campos', hoy); // teléfono no coincide con nadie → cae a nombre
+    assert.strictEqual(r.source, 'name');
+    assert.strictEqual(r.stay.reservationId, 'N9');
+    // 2 llamadas reales (llegadas + alojados, 1 página cada una) para TODO
+    // el proceso: el intento por teléfono puebla la caché y el de nombre la
+    // reutiliza — nunca 4 (lo que daría si repaginara aparte).
+    assert.strictEqual(axiosCalls, 2, 'la búsqueda por nombre debía servirse de la misma carga que ya hizo la de teléfono, no repaginar');
+  });
+
+  await t('Cloudbeds falla en el intento por teléfono: la búsqueda por nombre lo intenta de nuevo y también puede fallar → source:"none", sin lanzar', async () => {
+    const hoy = diaUnico();
+    forceFailure = 'reject';
+    let r;
+    try {
+      r = await resolveIncidentStay('+34600111000', 'Cualquier Nombre', hoy);
+    } finally {
+      forceFailure = null;
+    }
+    assert.strictEqual(r.source, 'none');
+    assert.strictEqual(r.stay, null);
   });
 
   console.log('\nhealthSnapshot().scan:');

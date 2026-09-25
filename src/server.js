@@ -443,9 +443,30 @@ function withGuestLookupTimeout(promise) {
 
 // Línea "Reserva: ..." del aviso de Telegram de report_incident — un único
 // sitio para no repetir la plantilla cuando hay varias reservas empatadas
-// (ver findStaysByPhone en src/guest-lookup.js).
+// (ver findStaysByPhone/resolveIncidentStay en src/guest-lookup.js).
 function formatStayLine(stay) {
   return `${stay.fullName || stay.firstName || '(sin nombre)'} · hab. ${stay.rooms ? stay.rooms.join(', ') : 'sin asignar'} · entrada ${stay.checkin || '?'} · salida ${stay.checkout || '?'} · canal ${stay.channel || '?'} · id ${stay.reservationId || '?'} · estado ${stay.status || '?'}`;
+}
+
+// Línea "Reserva: ..." completa a partir del resultado de
+// guestLookup.resolveIncidentStay() — 28-sep-2026 (dato de Luis): Booking
+// (72-83 % de las reservas del Konk) deja de mandar el teléfono del
+// huésped, así que a partir de esa fecha la mayoría de los avisos llegarán
+// aquí por 'name', no por 'phone'. `stays` es el array que ya construye el
+// handler (1 elemento si es definitiva, 2-3 si hay ambigüedad).
+function buildStayLine(matchSource, stays) {
+  if (matchSource === 'none' || !stays.length) return 'Reserva: no encontrada';
+  if (matchSource === 'phone') {
+    return stays.length === 1
+      ? `Reserva: ${formatStayLine(stays[0])}`
+      : stays.map((s, i) => `Reserva ${i + 1}/${stays.length}: ${formatStayLine(s)}`).join('\n');
+  }
+  // matchSource === 'name': se marca SIEMPRE "verificar" — es una
+  // coincidencia por nombre, no por teléfono, más débil por diseño.
+  return stays.length === 1
+    ? `Reserva (coincidencia por nombre, verificar): ${formatStayLine(stays[0])}`
+    : `Reserva: varias posibles (coincidencia por nombre, verificar):\n`
+      + stays.map((s, i) => `  ${i + 1}/${stays.length}: ${formatStayLine(s)}`).join('\n');
 }
 
 // ─── VAPI TOOL: report_incident ──────────────────────────────────────────────
@@ -494,53 +515,55 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
     || 'no detectado';
   const phoneLabel = phone === 'no detectado' ? 'no detectado (ver resumen de llamada)' : phone;
 
-  // V2a: la(s) estancia(s) encontradas por teléfono se añaden SOLO al aviso
-  // del EQUIPO (la respuesta hablada a Vapi, más abajo, no cambia). Nunca
-  // rompe el aviso si Cloudbeds falla o tarda (findStaysByPhone no lanza;
-  // withGuestLookupTimeout limita la espera) — el try/catch de aquí es una
-  // segunda red de seguridad. Corrección del auditor (24-sep-2026): antes
-  // se llamaba a findStayByPhone SIN carrera, así que con la caché fría y
-  // Cloudbeds lento el aviso de "no puede entrar" podía retrasarse varios
-  // segundos — ahora nunca espera más de GUEST_LOOKUP_TIMEOUT_MS.
+  // V2a: la(s) estancia(s) encontradas se añaden SOLO al aviso del EQUIPO
+  // (la respuesta hablada a Vapi, más abajo, no cambia). Nunca rompe el
+  // aviso si Cloudbeds falla o tarda (resolveIncidentStay no lanza;
+  // withGuestLookupTimeout limita la espera de TODO el proceso, teléfono +
+  // nombre, a un único plazo — no se reinicia el tope al pasar a nombre) —
+  // el try/catch de aquí es una segunda red de seguridad. Corrección del
+  // auditor (24-sep-2026): antes se llamaba a findStayByPhone SIN carrera,
+  // así que con la caché fría y Cloudbeds lento el aviso de "no puede
+  // entrar" podía retrasarse varios segundos — ahora nunca espera más de
+  // GUEST_LOOKUP_TIMEOUT_MS. 28-sep-2026 (dato de Luis): Booking (72-83 %
+  // de las reservas del Konk) deja de mandar el teléfono del huésped —
+  // resolveIncidentStay prueba por nombre (args.guest_name, entre las
+  // MISMAS candidatas) cuando el teléfono no aparece o no encuentra nada.
   const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-  let stays = []; // reservas del rango ganador: 0, 1, o varias si hay empate
+  let stays = [];            // 1 = definitiva; 2-3 = ambigua (empate o varios nombres posibles); 0 = nada
+  let matchSource = 'none';  // 'phone' | 'name' | 'none'
   let lookupTimedOut = false;
   try {
-    if (phone !== 'no detectado') {
-      const result = await withGuestLookupTimeout(guestLookup.findStaysByPhone(phone, todayISO));
-      if (result === GUEST_LOOKUP_TIMED_OUT) {
-        lookupTimedOut = true;
-      } else {
-        stays = result;
-      }
+    // 'no detectado' es un sentinel de ESTE archivo (para phoneLabel); no
+    // se pasa tal cual a guest-lookup.js (que no debe conocerlo) — así,
+    // sin teléfono real, resolveWinningMatches corta antes de tocar
+    // Cloudbeds y solo se paga esa llamada si hace falta para el nombre.
+    const phoneForLookup = phone === 'no detectado' ? null : phone;
+    const result = await withGuestLookupTimeout(guestLookup.resolveIncidentStay(phoneForLookup, args.guest_name, todayISO));
+    if (result === GUEST_LOOKUP_TIMED_OUT) {
+      lookupTimedOut = true;
+    } else {
+      matchSource = result.source;
+      stays = result.stay ? [result.stay] : result.tied;
     }
   } catch (err) {
     console.error('[report-incident] Error consultando la estancia (no bloquea el aviso):', err.message);
   }
 
-  // Corrección del auditor (empate, 24-sep-2026): si hay más de una reserva
-  // en el rango ganador (p. ej. dos llegadas de hoy con el mismo teléfono),
-  // se listan TODAS (findStaysByPhone ya las recorta a 3 como mucho) en
-  // orden determinista, numeradas — nunca se elige una al azar. Si venció
-  // el plazo de 2,5s, no se afirma nada sobre la reserva.
-  const stayLine = lookupTimedOut
-    ? 'Reserva: no consultada a tiempo'
-    : !stays.length
-      ? 'Reserva: no encontrada con este teléfono'
-      : stays.length === 1
-        ? `Reserva: ${formatStayLine(stays[0])}`
-        : stays.map((s, i) => `Reserva ${i + 1}/${stays.length}: ${formatStayLine(s)}`).join('\n');
+  // Corrección del auditor (empate, 24-sep-2026) + búsqueda por nombre
+  // (28-sep-2026): ver buildStayLine arriba. Si venció el plazo de 2,5s, no
+  // se afirma nada sobre la reserva.
+  const stayLine = lookupTimedOut ? 'Reserva: no consultada a tiempo' : buildStayLine(matchSource, stays);
 
-  // Las reservas empatadas comparten SIEMPRE el mismo veredicto de urgencia
-  // (están en el mismo rango: o todas "llega hoy", o todas "alojado" — ver
-  // rankOf/isUrgentAccessIncident en src/guest-lookup.js y arriba), así que
-  // basta con mirar la primera. Si venció el plazo, no hay estancia con la
-  // que calcular la urgencia: nunca se marca urgente por esta vía (el
-  // huésped puede seguir describiéndolo como grave, pero eso no lo decide
-  // esta tool).
+  // Urgencia solo si hay una reserva DEFINITIVA con la que calcularla: por
+  // teléfono, incluso empatada (todas las empatadas comparten rango —
+  // "llega hoy" o "alojado" — luego comparten veredicto, basta con mirar la
+  // primera); por nombre, SOLO si es la única encontrada (varias posibles
+  // por nombre pueden estar en rangos distintos, sin veredicto común). Si
+  // venció el plazo, no hay estancia con la que calcular nada.
   const nowMurcia = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
-  const urgent = !lookupTimedOut && category === 'acceso'
-    && isUrgentAccessIncident(stays[0] || null, todayISO, nowMurcia.getHours());
+  const canComputeUrgency = stays.length >= 1 && (matchSource === 'phone' || stays.length === 1);
+  const urgent = !lookupTimedOut && category === 'acceso' && canComputeUrgency
+    && isUrgentAccessIncident(stays[0], todayISO, nowMurcia.getHours());
 
   const msg =
     (urgent ? '🚨 URGENTE — NO PUEDE ENTRAR\n' : '') +
@@ -551,7 +574,7 @@ app.post('/vapi/report-incident', vapiAuth, async (req, res) => {
     `${stayLine}\n` +
     `Detalle: ${description}`;
 
-  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}${lookupTimedOut ? ' | TIMEOUT' : ''}`);
+  console.log(`[report-incident] ${categoryLabel} | ${guest_name} | ${room} | ${phoneLabel} | ${description}${urgent ? ' | URGENTE' : ''}${lookupTimedOut ? ' | TIMEOUT' : ''}${matchSource === 'name' ? ' | POR NOMBRE' : ''}`);
 
   try {
     // Una incidencia de un huésped va al carril de alertas del grupo.

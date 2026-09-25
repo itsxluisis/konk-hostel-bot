@@ -313,20 +313,21 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     assert.ok(texto.includes('Reserva: Marta Ruiz García'));
   });
 
-  await t('acceso sin teléfono reconocido → "Reserva: no encontrada con este teléfono", no urgente', async () => {
+  await t('acceso sin teléfono reconocido y sin nombre que coincida (guest_name="Test") → "Reserva: no encontrada", no urgente', async () => {
     telegramCalls.length = 0;
     await callReportIncident({ phone: '+34699000111', category: 'acceso', description: 'no entra' });
     const texto = telegramCalls[0].text;
     assert.ok(!texto.startsWith('🚨'));
-    assert.ok(texto.includes('Reserva: no encontrada con este teléfono'));
+    assert.ok(texto.includes('Reserva: no encontrada'));
+    assert.ok(!texto.includes('coincidencia por nombre'), '"Test" no debe coincidir con ningún huésped real del fixture');
   });
 
-  await t('sin teléfono en el payload (no detectado) → "Reserva: no encontrada con este teléfono"', async () => {
+  await t('sin teléfono en el payload (no detectado) y sin nombre que coincida → "Reserva: no encontrada"', async () => {
     telegramCalls.length = 0;
     await callReportIncident({ phone: null, category: 'acceso', description: 'llamó sin número visible' });
     const texto = telegramCalls[0].text;
     assert.ok(texto.includes('Teléfono: no detectado'));
-    assert.ok(texto.includes('Reserva: no encontrada con este teléfono'));
+    assert.ok(texto.includes('Reserva: no encontrada'));
   });
 
   await t('condición del auditor (tope de tiempo, 24-sep-2026): si Cloudbeds tarda más de 2,5s, el aviso sale a tiempo con "Reserva: no consultada a tiempo" y SIN prefijo urgente calculado por reserva', async () => {
@@ -377,6 +378,67 @@ function callReportIncident({ phone, category = 'otro', guest_name = 'Test', roo
     assert.strictEqual(typeof scan.at, 'string');
     const raw = JSON.stringify(scan);
     assert.ok(!raw.includes('Marta') && !raw.includes('Nora') && !raw.includes('611222'), 'scan nunca debe exponer nombres ni teléfonos');
+  });
+
+  console.log('\nBúsqueda por nombre en report_incident (28-sep-2026: Booking deja de mandar el teléfono) · va al final\n');
+
+  await t('Booking sin teléfono: report_incident encuentra la reserva por NOMBRE (args.guest_name), la marca "verificar" y suma nameMatches en /health', async () => {
+    const before = await (await fetch(`${BASE}/health`)).json();
+    allReservations = [
+      reserva({
+        id: 'BOOKING-SIN-TEL', checkin: HOY, checkout: MANANA, channel: 'Booking.com',
+        guests: [{ guestID: 'g1', first: 'Teresa', last: 'Vidal Ponce', isMainGuest: true }], // sin phone: Booking desde 28-sep-2026
+      }),
+    ];
+    const restoreClock = forceFreshCloudbedsFetch();
+    try {
+      telegramCalls.length = 0;
+      const r = await callReportIncident({ phone: '+34699222333', guest_name: 'Teresa Vidal Ponce', category: 'acceso', description: 'no encuentra el código' });
+      assert.strictEqual(r.status, 200);
+      const body = await r.json();
+      assert.strictEqual(body.result, 'Incidencia registrada y equipo avisado.', 'la respuesta a Vapi no cambia');
+      const texto = telegramCalls[0].text;
+      assert.ok(texto.includes('Reserva (coincidencia por nombre, verificar): Teresa Vidal Ponce'), `debía usar la reserva encontrada por nombre: ${texto}`);
+      assert.ok(texto.includes('id BOOKING-SIN-TEL'));
+      const after = await (await fetch(`${BASE}/health`)).json();
+      assert.strictEqual(after.guestLookup.nameMatches, before.guestLookup.nameMatches + 1, 'debía sumar 1 a guestLookup.nameMatches');
+    } finally {
+      restoreClock();
+    }
+  });
+
+  await t('nombre ambiguo en report_incident: "varias posibles" con hasta 3, sin urgencia', async () => {
+    allReservations = [
+      reserva({ id: 'AMB-1', checkin: HOY, checkout: MANANA, channel: 'Booking.com', guests: [{ guestID: 'g1', first: 'Pedro', last: 'Martínez', isMainGuest: true }] }),
+      reserva({ id: 'AMB-2', checkin: MANANA, checkout: EN_5_DIAS, channel: 'Booking.com', guests: [{ guestID: 'g1', first: 'Pedro', last: 'Martínez', isMainGuest: true }] }),
+    ];
+    const restoreClock = forceFreshCloudbedsFetch();
+    try {
+      telegramCalls.length = 0;
+      await callReportIncident({ phone: '+34699222444', guest_name: 'Pedro Martínez', category: 'acceso', description: 'no entra' });
+      const texto = telegramCalls[0].text;
+      assert.ok(texto.includes('varias posibles (coincidencia por nombre, verificar)'), `debía listar varias posibles: ${texto}`);
+      assert.ok(texto.includes('AMB-1') && texto.includes('AMB-2'), 'debía listar las dos reservas ambiguas');
+      assert.ok(!texto.startsWith('🚨'), 'nombre ambiguo: nunca se afirma urgencia');
+    } finally {
+      restoreClock();
+    }
+  });
+
+  await t('nombre sin coincidencia en report_incident: "Reserva: no encontrada", sin "coincidencia por nombre"', async () => {
+    allReservations = [
+      reserva({ id: 'SIN-COINCIDIR', checkin: HOY, checkout: MANANA, channel: 'Booking.com', guests: [{ guestID: 'g1', first: 'Gonzalo', last: 'Prieto', isMainGuest: true }] }),
+    ];
+    const restoreClock = forceFreshCloudbedsFetch();
+    try {
+      telegramCalls.length = 0;
+      await callReportIncident({ phone: '+34699222555', guest_name: 'Ismael Rocha', category: 'acceso', description: 'no entra' });
+      const texto = telegramCalls[0].text;
+      assert.ok(texto.includes('Reserva: no encontrada'));
+      assert.ok(!texto.includes('coincidencia por nombre'));
+    } finally {
+      restoreClock();
+    }
   });
 
   console.log('\nEmpate real extremo a extremo (condición del auditor, 24-sep-2026) · último caso, va al final\n');
