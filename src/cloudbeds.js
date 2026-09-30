@@ -3,6 +3,7 @@
 'use strict';
 
 const axios = require('axios');
+const { capacidadDeTipo } = require('./room-names');
 
 const BASE = 'https://hotels.cloudbeds.com';
 const TOKEN_URL = 'https://hotels.cloudbeds.com/api/v1.2/access_token';
@@ -212,11 +213,13 @@ async function getAvailability(checkinDate, checkoutDate, guests = 1) {
       // Inferir capacidad real por habitación desde el nombre si maxGuests es incorrecto
       const name = t.roomTypeName.toLowerCase();
       let capPerRoom = parseInt(t.maxGuests) || 1;
-      // Si no es privada, la capacidad real está en el nombre
+      // Si no es privada, la capacidad real está en el nombre. Con los nombres
+      // de 30-sep-2026 ("Habitación 4 · Dormitorio mixto 6 camas") va por
+      // "<n> camas"; el dígito suelto (formato antiguo) es el último recurso
+      // — ver capacidadDeTipo en src/room-names.js.
       if (!t.isPrivate) {
-        if (name.includes('6')) capPerRoom = 6;
-        else if (name.includes('4')) capPerRoom = 4;
-        else if (name.includes('5')) capPerRoom = 5;
+        const inferida = capacidadDeTipo(t.roomTypeName);
+        if (inferida) capPerRoom = inferida;
       }
       typesMeta[t.roomTypeID] = {
         isPrivate: t.isPrivate,

@@ -344,6 +344,23 @@ function reserva({ id, checkin, checkout, status = 'confirmed', channel = 'Direc
     assert.deepStrictEqual(r.rooms, ['Dorm 1', 'Dorm 2']);
   });
 
+  await t('nombres nuevos de Cloudbeds (30-sep-2026, con "·"): pasan TAL CUAL al equipo (Telegram), sin humanizar para voz', async () => {
+    const hoy = diaUnico();
+    allReservations = [
+      reserva({
+        id: 'ROOM2B', checkin: hoy, checkout: addDays(hoy, 1),
+        guests: [{ guestID: 'g1', first: 'Ona', last: 'Ferrer', phone: '+34677888996', isMainGuest: true }],
+        reservationRooms: [
+          { roomID: '404772-2', roomName: 'Hab 2 · Cama 3', roomTypeName: 'Habitación 2 · Dormitorio mixto 6 camas' },
+          { roomID: '404754-0', roomName: 'Hab 10 · Doble entrada indep.', roomTypeName: 'Habitación 10 · Doble entrada independiente' },
+          { roomID: '404772-2', roomName: 'Hab 2 · Cama 3' }, // sub-reserva repetida
+        ],
+      }),
+    ];
+    const r = await findStayByPhone('+34677888996', hoy);
+    assert.deepStrictEqual(r.rooms, ['Hab 2 · Cama 3', 'Hab 10 · Doble entrada indep.']);
+  });
+
   await t('sin rooms[] a nivel de reserva (Cloudbeds no lo devolvió): usa la del huésped (roomName)', async () => {
     const hoy = diaUnico();
     allReservations = [

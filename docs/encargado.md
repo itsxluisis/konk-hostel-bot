@@ -696,14 +696,16 @@ x-encargado-secret: <ENCARGADO_SECRET>
 
 - `src/encargado/inventario.js` — gestión del inventario de camas del Konk. Funciones puras:
   - `camas(soloBloqueadas)` — devuelve array con todas las camas o solo las bloqueadas; caché de 10 minutos desde Cloudbeds.
-  - `elegir(lista, texto)` — función pura que busca UNA cama en la lista por nombre exacto (sin tildes ni mayúsculas); si encaja con varias o ninguna, devuelve `null`.
+  - `normalizar(texto)` — minúsculas, sin tildes, y el punto medio `·`, paréntesis, corchetes, guiones, barras, puntos, comas, dos puntos y punto y coma cuentan como un espacio; "habitación" = "hab". Así "hab 2 cama 1", "habitación 2 cama 1" y "Hab 2 · Cama 1" dan lo mismo (y el antiguo "R2(1)" = "r2 1").
+  - `elegir(lista, texto)` — función pura que busca UNA cama en la lista: primero el nombre exacto; si no, por coincidencia parcial con el nombre o con el tipo, donde un número en el borde del texto tiene que ser un número completo ("hab 1" es la Hab 1, no la Hab 10; "cama 1" no casa con "cama 10"). Con varias candidatas no elige: devuelve `{varias}` y el encargado pregunta; con ninguna, `{motivo}`.
   - `buscar(texto)` — busca en el inventario actual; si hay ambigüedad, devuelve la lista; si hay una coincidencia, devuelve la cama.
   - `resumen()` — resumen breve: "31 camas, 3 bloqueadas" (solo lectura).
   
-  **Inventario real del Konk (11-sep-2026):** 31 unidades:
-  - **Compartidas (26 camas):** R2(1..6) tipo "Habitación Compartida/Privada 6" (6 camas); R4(1..6) tipo "Habitación compartida/privada 6" (6 camas); H9(1..6) tipo "Habitación compartida / privada mujeres 6" (dormitorio femenino, 6 camas); R5(1..4) tipo "Habitación Compartida/Privada 4" (4 camas); R8(1..4) tipo "Habitación compartida/privada 4" (4 camas).
-  - **Privadas (5 habitaciones):** Room 1 (Doble); Room 7 (Doble); Room 10 (Doble con entrada independiente); "Room 6 parejas" (litera matrimonio, 2 ó 4 personas); R3(1) (Doble adaptada para minusválidos).
-  - **Nota sobre conteo:** R4 y H9 no aparecían en la primera página de `getRooms` (trampa de paginado: la API devuelve solo 20 por defecto). Tras paginar correctamente se ven los 31 reales. Se cuenta lo físico, no el nombre del tipo.
+  **Inventario real del Konk (renombrado en Cloudbeds el 30-sep-2026):** 31 unidades. Las unidades (`roomName`) se llaman `Hab N · …` y los tipos (`roomTypeName`) `Habitación N · …`; el separador es un punto medio `·` (U+00B7) con espacios a los lados.
+  - **Compartidas (26 camas):** `Hab 2 · Cama 1..6` (tipo 404772 "Habitación 2 · Dormitorio mixto 6 camas"); `Hab 4 · Cama 1..6` (416657 "Habitación 4 · Dormitorio mixto 6 camas"); `Hab 5 · Cama 1..4` (404771 "Habitación 5 · Dormitorio mixto 4 camas"); `Hab 8 · Cama 1..4` (416665 "Habitación 8 · Dormitorio mixto 4 camas"; a finales de oct-2026 pasará a privada entera de 4); `Hab 9 · Cama 1..6` (674038 "Habitación 9 · Dormitorio femenino 6 camas").
+  - **Privadas (5 habitaciones):** `Hab 1 · Doble` (404756 "Habitación 1 · Doble"); `Hab 3 · Adaptada` (416650 "Habitación 3 · Doble adaptada"); `Hab 6 · Litera matrimonio` (404757 "Habitación 6 · Litera de matrimonio 2-4 pax", hasta 4 personas); `Hab 7 · Doble` (413128 "Habitación 7 · Doble"); `Hab 10 · Doble entrada indep.` (404754 "Habitación 10 · Doble entrada independiente").
+  - **Nombres antiguos (hasta el 30-sep-2026):** `R2(1..6)`, `R3(1)`, `R4(1..6)`, `R5(1..4)`, `Room 6 parejas`, `R8(1..4)`, `H9(1..6)`, `Room 1`, `Room 7`, `Room 10`; tipos como "Habitación Compartida/Privada 6" o "Habitación doble adaptada minusválidos". Ya no salen de Cloudbeds, pero los tests siguen cubriendo el matcher con ellos.
+  - **Nota sobre conteo:** la primera versión del inventario no veía parte de los dormitorios 4, 8 y 9 (antes R4, R8 y H9) por la trampa de paginado (la API devuelve solo 20 por defecto). Tras paginar correctamente se ven los 31 reales. Se cuenta lo físico, no el nombre del tipo.
 
 - `src/encargado/acciones-camas.js` — acciones para cambiar estado de camas:
   - `bloquear_cama(parametros)` — bloquea un rango de fechas en una cama concreta. Riesgo **alto** porque cierra esa cama; se escribe de verdad en Cloudbeds API endpoint `postRoomBlock` con `roomBlockID` único. Propuesta muestra: nombre de la cama, fechas exactas, razón del bloqueo.
@@ -712,9 +714,24 @@ x-encargado-secret: <ENCARGADO_SECRET>
 - Consulta nueva en `src/encargado/consultas.js`:
   - `que_camas_hay(soloBloqueadas)` — solo lectura: lista todas las camas o solo las que están bloqueadas en Cloudbeds en la fecha actual o en un rango. Sin parámetros toca que es un booleano true/false.
 
+### Nombres de habitación: qué depende del formato (renombrado 30-sep-2026)
+
+Los nombres salen en vivo de Cloudbeds (`roomName` = unidad, `roomTypeName` = tipo), así que cualquier cosa que los interprete tiene que conocer el formato `Hab N · …` / `Habitación N · …`. Dónde está cada dependencia:
+
+| Qué | Dónde | Cómo depende del nombre |
+|---|---|---|
+| Elegir la cama de la que habla Luis (Telegram) | `src/encargado/inventario.js` (`normalizar`, `elegir`) | Coincidencia exacta y luego parcial; separadores y números completos (ver arriba). |
+| Capacidad de un dormitorio | `src/cloudbeds.js` → `capacidadDeTipo` en `src/room-names.js` | Solo para tipos compartidos. Primero `<n> camas`, luego `<n> pax`, último recurso el dígito suelto 6/4/5 (ignorando el número de puerta del principio). |
+| Etiqueta hablada de las privadas | `src/availability.js` (`roomLabel`) | Por palabras clave del tipo: "litera de matrimonio", "adaptada", "independiente", "doble". Si se renombra un tipo sin esas palabras, sale "una habitación privada" a secas. |
+| Agrupar tipos compartidos | `src/cloudbeds.js` (`getAvailability`) | Agrupa por nombre normalizado. Con los nombres nuevos cada dormitorio es un tipo distinto (antes Hab 2 y Hab 4 se fundían en uno). |
+| Decir un nombre por teléfono | `hablarHabitacion` en `src/room-names.js` | Función pura: "Hab 2 · Cama 3" → "habitación 2, cama 3". Hoy ninguna tool de voz devuelve un nombre crudo (get_availability usa `roomLabel`; get_current_date nunca dice la habitación), así que aún no se usa; si se añade algo que hable una habitación, pasarla por aquí. En Telegram el nombre se queda tal cual. |
+| Facturas del Konk (`FACTURADOR KONK`) | `generar_facturas.py`, `factura_agrupada.py` | Solo imprime `roomName` (columna HABITACIÓN) y `roomTypeName` ("Tarifa de la habitación - …"); no lo interpreta. |
+
+⚠️ A finales de oct-2026 la Hab 8 pasa a privada entera de 4. Su tipo (416665) dejará de ser compartido: `capacidadDeTipo` ya no se aplica (se usará el `maxGuests` de Cloudbeds), y `roomLabel` dirá "una habitación privada" salvo que el nombre nuevo incluya alguna palabra clave. Comprobar `maxGuests` = 4 en `/admin/room-types` cuando cambie.
+
 ### Escribir en Cloudbeds — cinco trampas verificadas en producción (11-sep-2026)
 
-**Trampa 0: Cloudbeds pagina TODO lo que lista.** `getRooms`, `getReservations`, `getTransactions`, `getRoomBlocks` devuelven solo la primera página si no se especifican `pageNumber` y `pageSize`. El error no se nota porque los datos parecen completos: están los primeros N registros, pero faltan los demás. Ejemplo real: `getRooms` sin paginar devolvía 20 camas (count: 20, total: 31); dos dormitorios enteros —el femenino H9 y el R8— y la sexta cama del R4 no existían para el encargado. Afectaba también a `getReservations` en el recolector: el parte diario mira 60 días de entradas, pero si solo ve la primera página, pierde gente si hay más. **Solución:** comparar siempre `count` con `total`. Si `count < total`, hay más páginas. El módulo `src/encargado/paginado.js` exporta `todas(endpoint, params)` que recorre automáticamente todas las páginas (tamaño 100, corta cuando una página es más corta que el tamaño o al alcanzar `total`). Lo usan `inventario.js`, `recolector.js` y `consultas.js`. Verificado 11-sep-2026: fue la causa de que R4 y H9 desaparecieran.
+**Trampa 0: Cloudbeds pagina TODO lo que lista.** `getRooms`, `getReservations`, `getTransactions`, `getRoomBlocks` devuelven solo la primera página si no se especifican `pageNumber` y `pageSize`. El error no se nota porque los datos parecen completos: están los primeros N registros, pero faltan los demás. Ejemplo real: `getRooms` sin paginar devolvía 20 camas (count: 20, total: 31); dos dormitorios enteros —el femenino (entonces H9, hoy Hab 9) y el de 4 camas (entonces R8, hoy Hab 8)— y la sexta cama del R4 (hoy Hab 4) no existían para el encargado. Afectaba también a `getReservations` en el recolector: el parte diario mira 60 días de entradas, pero si solo ve la primera página, pierde gente si hay más. **Solución:** comparar siempre `count` con `total`. Si `count < total`, hay más páginas. El módulo `src/encargado/paginado.js` exporta `todas(endpoint, params)` que recorre automáticamente todas las páginas (tamaño 100, corta cuando una página es más corta que el tamaño o al alcanzar `total`). Lo usan `inventario.js`, `recolector.js` y `consultas.js`. Verificado 11-sep-2026: fue la causa de que R4 y H9 (hoy Hab 4 y Hab 9) desaparecieran.
 
 **Trampa 1: Formato de POST.** Cloudbeds admite POST en `x-www-form-urlencoded` (key1=value1&key2=value2) pero **rechaza JSON** con error HTTP 200 + `{"success": false, "message": "Parameter X is required"}` para un parámetro que sí va puesto. El servidor (`src/cloudbeds.js`) convierte los POST a form-urlencoded automáticamente; los GET siguen siendo querystring normal.
 
@@ -816,24 +833,17 @@ Endpoints auxiliares que validan acceso sin modificar datos:
 
 ### Tests para selección de camas
 
-- `test/camas.test.js` — 8 casos sobre la función `elegir()`:
-  - Coincidencia exacta: "R2(1)" → elige R2(1).
-  - Sin tildes: "habitación" → ignora tildes en el inventario.
-  - Ambigüedad: "R2" → devuelve null, el encargado pregunta cuál ("¿R2(1) a R2(6)?").
-  - Nombres compuestos: "Room 6 parejas" → coincide exacto.
-  - Rechazo de parciales: "Room" → no elige nada (podría ser Room 1, 7, 10 o "Room 6 parejas").
-  - Con inventario real del Konk (31 camas).
+`test/camas.test.js` — 30 casos sobre `normalizar()` y `elegir()`, con el inventario nuevo completo (las 31 unidades reales, 30-sep-2026) y un inventario reducido con los nombres antiguos (compatibilidad):
+- `normalizar`: el punto medio, paréntesis, guiones, barras y puntos son separadores; sin tildes ni mayúsculas; "habitación" = "hab"; vacío/null no revientan.
+- Nombres nuevos: "hab 2 cama 1" encuentra "Hab 2 · Cama 1"; el nombre tal cual lo da Cloudbeds también sirve; "habitación 4 cama 3" = "Hab. 4 - Cama 3"; Hab 2 y Hab 4 (mismo nombre de tipo salvo la puerta) no se mezclan.
+- "hab 1" es la Hab 1 y NO la Hab 10 (se resuelve sola); "hab 10" es la Hab 10; "hab 3" y su tipo completo se resuelven.
+- Ambigüedad: "hab 2" (dormitorio entero) devuelve las 6 camas y pregunta; "cama 3" sola, "doble" y "dormitorio mixto 4 camas" tampoco eligen. Dos unidades con el mismo nombre exacto no se eligen.
+- Lo que no existe ("hab 11", "hab 2 cama 7") se dice claro; sin nombre o solo separadores ("·") no adivina.
+- Nombres antiguos (`R2(1)` vs `R2(10)`, `Room 7`, tipo entero ambiguo…): los 8 casos originales siguen pasando.
 
 ### Tests para acciones de camas
 
-`test/camas.test.js` — 8 casos sobre elegir la cama correcta, con el inventario
-real del Konk:
-- El nombre exacto manda: "R2(1)" no se confunde con "R2(10)".
-- Se compara sin tildes ni mayúsculas.
-- Ante la duda NO elige: "R2" devuelve las seis candidatas y pregunta.
-- Un tipo entero ("Compartida/Privada 6") también es ambiguo.
-- Lo que no existe se dice claro, y sin nombre no adivina.
-- Una privada con tipo único ("entrada independiente") sí se resuelve sola.
+Las acciones de cama (bloquear/desbloquear) usan `elegir()` a través de `inventario.buscar()`, así que heredan los casos de arriba: el nombre exacto manda, ante la duda NO elige y pregunta, lo que no existe se dice claro, y una privada con tipo único ("entrada independiente") se resuelve sola.
 
 Las salvaguardas de la confirmación (solo el jefe, caducidad, no ejecutar dos
 veces) están en `test/acciones.test.js` y valen para todas las acciones,
@@ -858,9 +868,10 @@ incluidas las de camas.
   - Órdenes caducadas (>24 h) se limpian automáticamente.
   - Resultado se reporta y persiste en disco.
   - `leer_ordenes_pendientes()` devuelve solo las de ese agente.
-- `test/camas.test.js` — 8 casos para elegir cama correcta:
+- `test/camas.test.js` — 30 casos para elegir cama correcta:
   - Coincidencia exacta, ambigüedad, rechazos.
-  - Con inventario real del Konk.
+  - Con el inventario real del Konk (nombres nuevos, 31 unidades) y con los antiguos.
+- `test/room-names.test.js` — 23 casos: `capacidadDeTipo` (capacidad de dormitorios desde el nombre del tipo), `hablarHabitacion` (cómo se dice por voz) y `getAvailability`+`buildReply` de punta a punta con los 10 tipos nuevos (sin red).
 
 ## Seguridad del webhook de Telegram (F2)
 

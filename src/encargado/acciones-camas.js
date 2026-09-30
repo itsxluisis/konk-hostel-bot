@@ -65,7 +65,7 @@ registrar('bloquear_cama', {
   descripcion: 'Bloquea una cama en Cloudbeds para que no se pueda vender'
     + ' (avería, limpieza, uso propio). Se deshace desbloqueándola.',
   parametros: {
-    cama: 'nombre de la cama, como R2(3) o "Room 7"',
+    cama: 'nombre de la cama, como "Hab 2 · Cama 3" o "Hab 7 · Doble"',
     desde: 'primera noche AAAA-MM-DD (por defecto hoy)',
     hasta: 'noche de salida AAAA-MM-DD (por defecto mañana)',
     motivo: 'por qué se bloquea',
@@ -133,7 +133,7 @@ async function bloqueosDe(nombreCama) {
 registrar('desbloquear_cama', {
   riesgo: 'medio',
   descripcion: 'Quita el bloqueo de una cama para que vuelva a venderse.',
-  parametros: { cama: 'nombre de la cama, como R2(3)' },
+  parametros: { cama: 'nombre de la cama, como "Hab 2 · Cama 3"' },
   async resumen({ cama }) {
     const r = await bloqueosDe(cama);
     if (r.imposible) return r;

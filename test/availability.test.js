@@ -73,6 +73,48 @@ const r2p2 = buildReply({ rooms: n2, totalCapacity: cap, guests: 2, preference: 
 check('shared 2pax: 92 total por 2 noches', r2p2, ['2 camas en habitación compartida, 92 euros en total por 2 noches']);
 console.log(`     [salida] ${r2p2}`);
 
+console.log('\nNombres NUEVOS de Cloudbeds (30-sep-2026): etiquetas de las privadas:');
+// Una privada sola, preferencia private: sale la etiqueta hablada de roomLabel().
+function soloPrivada(roomTypeName, cap, guests, precio = 60) {
+  return buildReply({
+    rooms: [room({ roomTypeName, soldAsWhole: true, capacityPerRoom: cap, bedsAvailable: cap, roomsPhysical: 1 }, precio, 1)],
+    totalCapacity: cap, guests, preference: 'private', nights: 1,
+  });
+}
+const MALOS = ['·', 'Habitación 1', 'Habitación 3', 'Habitación 6', 'Habitación 7', 'Habitación 10', 'Hab '];
+const rDoble1 = soloPrivada('Habitación 1 · Doble', 2, 2);
+check('Hab 1 · Doble → "doble"', rDoble1, ['una habitación privada doble para 2 personas, 60 euros en total por 1 noche'], MALOS);
+const rDoble7 = soloPrivada('Habitación 7 · Doble', 2, 2);
+check('Hab 7 · Doble → "doble"', rDoble7, ['una habitación privada doble para 2 personas'], MALOS);
+const rAdapt = soloPrivada('Habitación 3 · Doble adaptada', 2, 2, 65);
+check('Hab 3 · Doble adaptada → "doble adaptada y accesible"', rAdapt, ['una habitación privada doble adaptada y accesible para 2 personas, 65 euros'], [...MALOS, 'minusv']);
+const rLitera = soloPrivada('Habitación 6 · Litera de matrimonio 2-4 pax', 4, 4, 154);
+check('Hab 6 · Litera de matrimonio 2-4 pax → "con litera de matrimonio"', rLitera, ['una habitación privada con litera de matrimonio para 4 personas, 154 euros'], [...MALOS, 'pax']);
+const rIndep = soloPrivada('Habitación 10 · Doble entrada independiente', 2, 2, 70);
+check('Hab 10 · Doble entrada independiente → "doble con entrada independiente"', rIndep, ['una habitación privada doble con entrada independiente para 2 personas, 70 euros'], MALOS);
+console.log(`     [salida] ${rIndep}`);
+
+function konkNuevo(nights) {
+  return [
+    room({ roomTypeName: 'Habitación 1 · Doble', soldAsWhole: true, capacityPerRoom: 2, bedsAvailable: 2, roomsPhysical: 1 }, 60, nights),
+    room({ roomTypeName: 'Habitación 6 · Litera de matrimonio 2-4 pax', soldAsWhole: true, capacityPerRoom: 4, bedsAvailable: 4, roomsPhysical: 1 }, 154, nights),
+    // Cada dormitorio es ahora un tipo con su propio nombre (ya no se funden Hab 2 y Hab 4).
+    room({ roomTypeName: 'Habitación 2 · Dormitorio mixto 6 camas', soldAsWhole: false, capacityPerRoom: 6, bedsAvailable: 6, roomsPhysical: 1 }, 23, nights),
+    room({ roomTypeName: 'Habitación 4 · Dormitorio mixto 6 camas', soldAsWhole: false, capacityPerRoom: 6, bedsAvailable: 6, roomsPhysical: 1 }, 23, nights),
+    room({ roomTypeName: 'Habitación 5 · Dormitorio mixto 4 camas', soldAsWhole: false, capacityPerRoom: 4, bedsAvailable: 4, roomsPhysical: 1 }, 30, nights),
+  ];
+}
+const nuevo2 = konkNuevo(2);
+const capNuevo = nuevo2.reduce((s, r) => s + r.bedsAvailable, 0);
+const rNuevoAny = buildReply({ rooms: nuevo2, totalCapacity: capNuevo, guests: 4, preference: 'any', nights: 2 });
+check('any con los nombres nuevos: privada + compartida, total 2 noches, sin nombres crudos', rNuevoAny,
+  ['habitación privada con litera de matrimonio para 4 personas, 308 euros en total por 2 noches', '4 camas en habitación compartida, 184 euros en total por 2 noches'], MALOS);
+console.log(`     [salida] ${rNuevoAny}`);
+
+const rNuevoDorm = buildReply({ rooms: [nuevo2[2], nuevo2[3]], totalCapacity: 12, guests: 4, preference: 'private', nights: 2 });
+check('dormitorio entero para 4 (nombres nuevos): "un dormitorio entero… 6 camas", sin nombres crudos', rNuevoDorm,
+  ['un dormitorio entero solo para vosotros, 6 camas, 276 euros en total por 2 noches'], MALOS);
+
 console.log('\nCasos límite:');
 const rEmpty = buildReply({ rooms: [], totalCapacity: 0, guests: 3, preference: 'any', nights: 2 });
 check('sin habitaciones → mensaje claro', rEmpty, ['No tenemos disponibilidad']);

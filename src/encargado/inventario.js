@@ -1,10 +1,12 @@
 // src/encargado/inventario.js
 // El Konk por dentro: qué camas hay y cómo se llaman.
 //
-// Sin esto, "bloquea la cama 3" no significa nada. Cloudbeds las llama
-// R2(3), R5(1), "Room 7"… y el nombre del TIPO no siempre coincide con las
-// unidades reales (hay un tipo "compartida/privada 6" con 5 camas), así que
-// se cuenta lo que hay, no lo que dice el nombre.
+// Sin esto, "bloquea la cama 3" no significa nada. Desde el 30-sep-2026
+// Cloudbeds las llama "Hab 2 · Cama 3", "Hab 7 · Doble", "Hab 10 · Doble
+// entrada indep." (antes R2(3), R5(1), "Room 7"…). El nombre del TIPO
+// ("Habitación 2 · Dormitorio mixto 6 camas") no siempre coincide con las
+// unidades reales (antes había un tipo "compartida/privada 6" con 5 camas),
+// así que se cuenta lo que hay, no lo que dice el nombre.
 'use strict';
 
 const { api } = require('../cloudbeds');
@@ -45,9 +47,37 @@ async function camas({ refrescar = false } = {}) {
   return lista;
 }
 
+// Separadores que se tratan como un espacio: el punto medio de los nombres
+// nuevos ("Hab 2 · Cama 1"), paréntesis y corchetes (los antiguos "R2(1)"),
+// guiones, barras ("Compartida/Privada"), puntos ("Hab.", "indep.") y comas.
+const SEPARADORES = /[·()[\]\-–—/\\.,:;]/g;
+
 function normalizar(s) {
   return (s || '').toLowerCase().normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(SEPARADORES, ' ')
+    // "habitación 2 cama 3" = "hab 2 cama 3" (así lo escribirá Luis a veces).
+    .replace(/\bhabitacion(?:es)?\b/g, 'hab')
+    .replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * ¿`texto` contiene `q`? Como includes(), con una salvedad: un NÚMERO en el
+ * borde de `q` tiene que ser un número entero, no el principio o el final de
+ * otro más largo. Así "hab 1" no encaja con "hab 10 doble…", ni "cama 1" con
+ * "cama 10". Es lo que hace falta para que "hab 1" se resuelva solo (es una
+ * sola unidad) en vez de preguntar por la 10.
+ */
+function contiene(texto, q) {
+  const esDigito = c => c !== undefined && c >= '0' && c <= '9';
+  let i = texto.indexOf(q);
+  while (i !== -1) {
+    const izqOk = !(esDigito(q[0]) && esDigito(texto[i - 1]));
+    const derOk = !(esDigito(q[q.length - 1]) && esDigito(texto[i + q.length]));
+    if (izqOk && derOk) return true;
+    i = texto.indexOf(q, i + 1);
+  }
+  return false;
 }
 
 /**
@@ -59,12 +89,15 @@ function elegir(todas, texto) {
   const q = normalizar(texto);
   if (!q) return { varias: [], motivo: 'No me has dicho qué cama.' };
 
-  // El nombre exacto manda: "R2(1)" no debe confundirse con "R2(10)".
+  // El nombre exacto manda: "Hab 2 · Cama 1" no debe confundirse con otra
+  // que solo lo contenga (antes "R2(1)" con "R2(10)").
   const exacta = todas.filter(c => normalizar(c.nombre) === q);
   if (exacta.length === 1) return { cama: exacta[0] };
 
+  // Parcial: por palabras/números completos (ver contiene): "hab 1" es la
+  // Hab 1, no la Hab 10.
   const parcial = todas.filter(c =>
-    normalizar(c.nombre).includes(q) || normalizar(c.tipo).includes(q));
+    contiene(normalizar(c.nombre), q) || contiene(normalizar(c.tipo), q));
   if (parcial.length === 1) return { cama: parcial[0] };
   // Con más de una candidata NO se elige: bloquear la que no era es peor
   // que preguntar.
