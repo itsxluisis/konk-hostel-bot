@@ -38,6 +38,9 @@ const BACKOFF_MS = num(process.env.VIGILANTE_BACKOFF_MS, 3000);        // 3 s, 6
 const INTENTOS_DIA = num(process.env.VIGILANTE_INTENTOS_DIA, 3);       // revisiones completas al día
 const REINTENTO_MIN = num(process.env.VIGILANTE_REINTENTO_MIN, 20);    // espera entre ellas
 const HORA_LIMITE = num(process.env.VIGILANTE_HORA_LIMITE, 12);        // no reintenta a partir de esta hora
+// Tope global de un intento completo: si algo se cuelga sin timeout propio, cuenta
+// como fallo de ese intento en vez de dejar `enCurso` enganchado hasta un reinicio.
+const TOPE_INTENTO_MS = num(process.env.VIGILANTE_TOPE_INTENTO_MS, 5 * 60 * 1000);
 
 // Con WORKDIR /app y el código en /app/src, esto resuelve a /app/data: montar
 // ahí un volumen de EasyPanel basta para que el estado sobreviva a los deploys.
@@ -428,7 +431,7 @@ async function tick(ahora = ahoraMadrid(), ms = Date.now()) {
 
   enCurso = true;
   try {
-    await ejecutar({ enviar: true });
+    await conTope(ejecutar({ enviar: true }), TOPE_INTENTO_MS);
     return 'hecha';
   } catch (e) {
     intentos++;
@@ -452,13 +455,27 @@ async function tick(ahora = ahoraMadrid(), ms = Date.now()) {
   }
 }
 
+/** Rechaza si `promesa` no termina en `ms`. No cancela la original: solo deja de esperarla. */
+function conTope(promesa, ms) {
+  let timer;
+  const tope = new Promise((_, rechazar) => {
+    timer = setTimeout(() => {
+      const err = new Error(`la revisión no terminó en ${Math.round(ms / 1000)} s (llamada colgada)`);
+      err.code = 'TOPE_INTENTO';
+      rechazar(err);
+    }, ms);
+  });
+  return Promise.race([promesa, tope]).finally(() => clearTimeout(timer));
+}
+
 /** Fallo definitivo: se guarda, se avisa una sola vez y el latido va en rojo. */
 async function rendirse(estado, fecha, fallo) {
   estado.ultimoResultado = { ...fallo, definitivo: true, proximoReintento: null };
   guardarEstado(estado);
   latir(false, 'La revisión falló: ' + fallo.error, null);
+  let enviado = false;
   try {
-    await sendTelegram('KONK · vigilante de cobros\n\n⚠️ La revisión de hoy falló tras '
+    enviado = !!await sendTelegram('KONK · vigilante de cobros\n\n⚠️ La revisión de hoy falló tras '
       + fallo.intentos + ' intento(s).\n'
       + 'Llamada: ' + (fallo.endpoint || 'desconocida') + '\n'
       + 'Error: ' + fallo.error + '\n'
@@ -466,6 +483,10 @@ async function rendirse(estado, fecha, fallo) {
   } catch (e) {
     console.error('[Vigilante] no se pudo avisar del fallo:', e.message);
   }
+  // telegram.send devuelve null si no pudo enviar: que quede constancia, no silencio.
+  if (!enviado) console.error('[Vigilante] AVISO DE FALLO NO ENVIADO a Telegram');
+  estado.ultimoResultado.avisoEnviado = enviado;
+  guardarEstado(estado);
 }
 
 function arrancar() {

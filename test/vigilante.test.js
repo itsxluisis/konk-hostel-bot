@@ -96,7 +96,8 @@ const fakeCloudbeds = {
     return { success: false };
   },
 };
-const fakeTelegram = { send: async t => { enviados.push(t); } };
+let telegramFalla = false;   // true: send devuelve null, como el real cuando no puede enviar
+const fakeTelegram = { send: async t => { enviados.push(t); return telegramFalla ? null : { message_id: 1 }; } };
 
 // Doble de axios para cargar el cloudbeds.js REAL (test de que el bot de voz
 // conserva sus 6 s). Registra la config de cada request; nunca toca la red.
@@ -115,6 +116,7 @@ Module.prototype.require = function (id) {
 };
 process.env.DATA_DIR = path.join(require('os').tmpdir(), 'vig-test-' + Date.now());
 process.env.VIGILANTE_DESDE = ayer(30);   // R11 salió antes del corte
+process.env.VIGILANTE_TOPE_INTENTO_MS = '400';   // tope global por intento (test de cuelgue)
 process.env.VIGILANTE_BACKOFF_MS = '1';   // los reintentos del test no esperan segundos
 const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
 // La intercepcion se queda puesta: vigilante.js carga './encargado/estado' de
@@ -166,7 +168,7 @@ const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
   const estadoPath = path.join(process.env.DATA_DIR, 'vigilante-estado.json');
   const reset = () => {
     fs.writeFileSync(estadoPath, JSON.stringify({ conocidos: {} }));
-    enviados = []; latidos = []; llamadas = []; apiHook = null;
+    enviados = []; latidos = []; llamadas = []; apiHook = null; telegramFalla = false;
   };
   const estadoDisco = () => JSON.parse(fs.readFileSync(estadoPath, 'utf8'));
   const fechaMadrid = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid' }).format(new Date());
@@ -296,6 +298,41 @@ const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
   await cb.api('GET', '/getRooms', {}, { timeout: 30000 });
   assert.strictEqual(configsAxios[configsAxios.length - 1].timeout, 30000, 'timeout por llamada solo si se pide');
 
+  // 10. un cuelgue sin timeout propio (p. ej. el refresco de token) = fallo del intento
+  reset();
+  apiHook = ruta => (ruta === '/getReservations' ? new Promise(() => {}) : undefined);   // nunca resuelve
+  assert.strictEqual(await vig.tick(ahoraT(9), T0), 'reintento-programado', 'el cuelgue cuenta como fallo del intento');
+  est = estadoDisco();
+  assert.strictEqual(est.ultimaRevision || null, null);
+  assert.ok(est.ultimoResultado.error.includes('no terminó'), 'el error dice que se colgó');
+  assert.strictEqual(Date.parse(est.ultimoResultado.proximoReintento), T0 + 20 * MIN, 'queda reintento a los 20 min');
+  apiHook = null;
+  assert.strictEqual(await vig.tick(ahoraT(9), T0 + 20 * MIN), 'hecha', 'enCurso se liberó: el reintento corre y funciona');
+
+  // 11. si Telegram no puede enviar el aviso de fallo, queda constancia
+  reset();
+  telegramFalla = true;
+  apiHook = async ruta => { if (ruta === '/getReservations') throw errTimeout(); };
+  await vig.tick(ahoraT(9), T0);
+  await vig.tick(ahoraT(9), T0 + 20 * MIN);
+  assert.strictEqual(await vig.tick(ahoraT(10), T0 + 40 * MIN), 'agotado');
+  est = estadoDisco();
+  assert.strictEqual(est.ultimoResultado.definitivo, true, 'la logica de definitivo no cambia');
+  assert.strictEqual(est.ultimoResultado.avisoEnviado, false, 'send null → avisoEnviado:false');
+  assert.strictEqual(vig.info().ultimoResultado.avisoEnviado, false, 'visible en /health');
+  reset();
+  apiHook = async ruta => { if (ruta === '/getReservations') throw errTimeout(); };
+  await vig.tick(ahoraT(9), T0); await vig.tick(ahoraT(9), T0 + 20 * MIN); await vig.tick(ahoraT(10), T0 + 40 * MIN);
+  assert.strictEqual(estadoDisco().ultimoResultado.avisoEnviado, true, 'send ok → avisoEnviado:true');
+
+  // 12. el refresco de token lleva timeout (15 s) en el cloudbeds.js real
+  let postConfig = null;
+  const post0 = fakeAxios.post;
+  fakeAxios.post = async (u, d, c) => { postConfig = c; return post0(); };
+  await cb.exchangeCode('otro-codigo');
+  assert.strictEqual(postConfig.timeout, 15000, 'exchangeCode: timeout 15000');
+  fakeAxios.post = post0;
+
   console.log('  ✓ el vigilante usa timeout propio de 30 s');
   console.log('  ✓ reintenta ante timeout, 429, 5xx y ECONNRESET; el reintento exitoso marca el dia');
   console.log('  ✓ 400/401/403 no se reintentan');
@@ -303,6 +340,9 @@ const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
   console.log('  ✓ /health no hace creer que se reviso tras un fallo');
   console.log('  ✓ ventana cerrada con reintento pendiente = fallo definitivo; domingo y fuera de hora no corren');
   console.log('  ✓ el bot de voz conserva su timeout de 6 s');
+  console.log('  ✓ un intento colgado cuenta como fallo y libera enCurso');
+  console.log('  ✓ aviso de fallo no enviado queda registrado (avisoEnviado)');
+  console.log('  ✓ el refresco de token tiene timeout de 15 s');
 
   console.log('  ✓ excluye Booking, Airbnb y Expedia');
   console.log('  ✓ detecta escapado, parcial y cobrado de mas');

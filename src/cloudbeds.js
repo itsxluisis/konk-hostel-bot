@@ -79,7 +79,7 @@ async function exchangeCode(code) {
     client_secret: process.env.CLOUDBEDS_CLIENT_SECRET,
     redirect_uri: process.env.CLOUDBEDS_REDIRECT_URI,
     code,
-  }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 });
 
   accessToken = res.data.access_token;
   refreshToken = res.data.refresh_token;
@@ -98,7 +98,7 @@ async function refreshAccessToken() {
     client_id: process.env.CLOUDBEDS_CLIENT_ID,
     client_secret: process.env.CLOUDBEDS_CLIENT_SECRET,
     refresh_token: refreshToken,
-  }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 });
 
   accessToken = res.data.access_token;
   tokenExpiry = Date.now() + (res.data.expires_in - 60) * 1000;
