@@ -152,3 +152,11 @@ A React-based single-HTML-file admin panel was built, connecting to Vapi via API
 - **`src/email-dictado.js` (nuevo, puro):** `normalizarEmailDictado` (arroba/at→@, punto/dot→., guion bajo/underscore→_, guion/dash→-, minúsculas, sin espacios ni tildes), `validarEmail` y `respuestaEmailDictado` (devuelve `{ok,email}` o `{ok:false,mensaje}` con el texto para que el modelo pida repetir deletreando). `test/email-dictado.test.js`: 18 casos.
 - **Sin cablear a propósito:** ninguna tool del bot recoge hoy un correo (`get_availability`, `get_current_date`, `report_incident`). Cuando se añada una, pasar el valor por `respuestaEmailDictado`.
 - **Grabación:** el asistente Marcos graba (sus llamadas tienen `recordingUrl`; `artifactPlan` sin `recordingEnabled` = por defecto activo). El `firstMessage` vive solo en Vapi (ni `sync-vapi.yml` ni el repo lo gestionan): cambiarlo es un PATCH en vivo (panel admin o dashboard) y requiere OK de Luis al texto.
+
+## 5-oct-2026 — Vigilante de cobros: reintentos y día no marcado si falla
+
+- **Incidente:** 09:02, `timeout of 6000ms exceeded` (axios ECONNABORTED; 6 s compartido con el bot de voz en `api()`); sin reintento y el `catch` marcaba `ultimaRevision = hoy`, así que no se reintentaba hasta mañana y `/health` decía que se había revisado.
+- **`src/cloudbeds.js`:** `api(method, path, params, opts)`; `opts.timeout` (por defecto 6000, sin cambios para el bot de voz).
+- **`src/vigilante.js`:** `llamar()` (timeout 30 s, 2 reintentos con espera 3 s/6 s ante timeout, ECONNRESET y similares, 429 y 5xx; nunca ante 4xx) y `tick()` (exportado, testeable): un fallo no marca `ultimaRevision`, reintenta a los 20 min (3 intentos al día, hasta las 12:00), y solo al agotarlos avisa a Cobros (llamada + error) y pone el latido en rojo. `/health.vigilante.ultimoResultado` nuevo; `ultimaRevision` solo avanza si terminó bien.
+- **Variables nuevas (opcionales):** `VIGILANTE_TIMEOUT_MS` 30000, `VIGILANTE_REINTENTOS_API` 2, `VIGILANTE_BACKOFF_MS` 3000, `VIGILANTE_INTENTOS_DIA` 3, `VIGILANTE_REINTENTO_MIN` 20, `VIGILANTE_HORA_LIMITE` 12. Detalle en `docs/encargado.md`.
+- **Tests:** `test/vigilante.test.js` (reintento tras timeout, 429/5xx/ECONNRESET, 401/403/400 sin reintento, fallo total, ventana cerrada, bot de voz a 6 s). Sin push (lo hace NEXO tras auditoría).

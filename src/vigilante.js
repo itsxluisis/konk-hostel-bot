@@ -28,6 +28,17 @@ const RECORDAR_CADA = Number(process.env.VIGILANTE_RECORDAR_DIAS || 7);
 const HORA = Number(process.env.VIGILANTE_HORA || 9);
 const TZ = 'Europe/Madrid';
 
+// Resiliencia ante un Cloudbeds lento (incidente del 5-oct-2026: timeout de 6 s
+// a las 09:02 y el día quedó sin revisar). El vigilante corre en segundo plano,
+// no tiene un huésped esperando al teléfono: puede esperar más que el bot de voz.
+const num = (v, def) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : def);
+const TIMEOUT_MS = num(process.env.VIGILANTE_TIMEOUT_MS, 30000);       // por llamada
+const REINTENTOS_API = num(process.env.VIGILANTE_REINTENTOS_API, 2);   // por llamada
+const BACKOFF_MS = num(process.env.VIGILANTE_BACKOFF_MS, 3000);        // 3 s, 6 s, 12 s...
+const INTENTOS_DIA = num(process.env.VIGILANTE_INTENTOS_DIA, 3);       // revisiones completas al día
+const REINTENTO_MIN = num(process.env.VIGILANTE_REINTENTO_MIN, 20);    // espera entre ellas
+const HORA_LIMITE = num(process.env.VIGILANTE_HORA_LIMITE, 12);        // no reintenta a partir de esta hora
+
 // Con WORKDIR /app y el código en /app/src, esto resuelve a /app/data: montar
 // ahí un volumen de EasyPanel basta para que el estado sobreviva a los deploys.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
@@ -58,11 +69,58 @@ const dias = (iso, n) => {
   return d.toISOString().slice(0, 10);
 };
 
+const dormir = ms => new Promise(r => setTimeout(r, ms));
+
+/**
+ * ¿Merece la pena repetir esta llamada? Sí ante lo transitorio: timeout, corte
+ * de red, 429 y 5xx. Nunca ante un 4xx (401/403 = auth, el resto = petición
+ * mala): repetirlo solo machacaría a Cloudbeds con el mismo error.
+ */
+function esTransitorio(err) {
+  const st = err && err.response && err.response.status;
+  if (st) return st === 429 || st >= 500;
+  return ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN',
+    'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH', 'ERR_NETWORK'].includes(err && err.code);
+}
+
+/**
+ * Llamada a Cloudbeds con timeout propio y reintentos con espera creciente.
+ * Si se agota, lanza un Error que nombra la llamada (err.endpoint) y el motivo.
+ */
+async function llamar(method, endpoint, params = {}) {
+  let intento = 0;
+  for (;;) {
+    try {
+      return await api(method, endpoint, params, { timeout: TIMEOUT_MS });
+    } catch (e) {
+      intento++;
+      if (esTransitorio(e) && intento <= REINTENTOS_API) {
+        const espera = BACKOFF_MS * 2 ** (intento - 1);
+        console.warn(`[Vigilante] ${method} ${endpoint} falló (${e.code || (e.response && e.response.status) || e.message}); reintento ${intento}/${REINTENTOS_API} en ${espera} ms`);
+        await dormir(espera);
+        continue;
+      }
+      const st = e.response && e.response.status;
+      const err = new Error(`${method} ${endpoint} — ${e.message}`
+        + (st ? ` (HTTP ${st})` : (e.code ? ` (${e.code})` : ''))
+        + (intento > 1 ? ` tras ${intento} intentos` : ''));
+      err.endpoint = `${method} ${endpoint}`;
+      err.status = st;
+      err.code = e.code;
+      throw err;
+    }
+  }
+}
+
 async function paginas(endpoint, params = {}, size = 100) {
   const out = [];
   for (let page = 1; page <= 300; page++) {
-    const r = await api('GET', endpoint, { ...params, pageNumber: page, pageSize: size });
-    if (!r.success) throw new Error(`${endpoint}: ${JSON.stringify(r).slice(0, 200)}`);
+    const r = await llamar('GET', endpoint, { ...params, pageNumber: page, pageSize: size });
+    if (!r.success) {
+      const err = new Error(`GET ${endpoint}: ${JSON.stringify(r).slice(0, 200)}`);
+      err.endpoint = `GET ${endpoint}`;
+      throw err;
+    }
     const d = r.data || [];
     out.push(...d);
     if (d.length < size) break;
@@ -131,7 +189,7 @@ async function revisarCobros(hoy) {
 
   const escapados = [], parciales = [], dobles = [];
   for (const r of candidatas) {
-    const d = await api('GET', '/getReservation', { reservationID: r.reservationID });
+    const d = await llamar('GET', '/getReservation', { reservationID: r.reservationID });
     if (!d.success) continue;
     const b = d.data.balanceDetailed;
     const total = Number(b.grandTotal), pagado = Number(b.paid || 0);
@@ -185,7 +243,7 @@ async function revisarBloqueos(hoy) {
   let d = dias(hoy, -DIAS_BLOQUEOS);
   while (d <= hoy) {
     const fin = dias(d, 30) > hoy ? hoy : dias(d, 30);
-    const r = await api('GET', '/getRoomBlocks', { startDate: d, endDate: fin, pageSize: 100 });
+    const r = await llamar('GET', '/getRoomBlocks', { startDate: d, endDate: fin, pageSize: 100 });
     const data = r.data;
     const grupos = Array.isArray(data) ? data : (data ? [data] : []);
     for (const g of grupos) {
@@ -280,6 +338,15 @@ function latir(ok, resumen, detalle) {
 }
 
 // ─── ejecución ───────────────────────────────────────────────────────────────
+/** Revisión completada: se da el día por hecho y se olvida cualquier fallo previo. */
+function marcarHecha(estado, hoy) {
+  const prev = estado.ultimoResultado;
+  const intentos = prev && prev.ok === false && prev.fecha === hoy ? prev.intentos + 1 : 1;
+  estado.ultimaRevision = hoy;
+  estado.ultimoResultado = { ok: true, fecha: hoy, cuando: new Date().toISOString(), intentos };
+  guardarEstado(estado);
+}
+
 async function ejecutar({ enviar = true, todo = false } = {}) {
   const { fecha: hoy } = ahoraMadrid();
   console.log(`[Vigilante] revisando (${hoy})`);
@@ -309,15 +376,13 @@ async function ejecutar({ enviar = true, todo = false } = {}) {
   }, [...pe.viejos, ...pp.viejos]);
 
   if (!mensaje) {
-    estado.ultimaRevision = hoy;
-    guardarEstado(estado);
+    marcarHecha(estado, hoy);
     latir(true, 'Sin incidencias: todos los cobros cuadran.', resumen);
     return { ...resumen, avisado: false, mensaje: null };
   }
   if (enviar) {
     await sendTelegram(mensaje, { threadId: carrilCobros() });
-    estado.ultimaRevision = hoy;
-    guardarEstado(estado);   // solo se persiste si se envió
+    marcarHecha(estado, hoy);   // solo se persiste si se envió
   }
   // El vigilante hizo su trabajo: encontrar algo NO es un fallo suyo. Latido en
   // verde con el detalle; de las alarmas ya avisa él por su cuenta.
@@ -329,28 +394,86 @@ async function ejecutar({ enviar = true, todo = false } = {}) {
 }
 
 // ─── programador: L-S a las 09:00 de Madrid, domingos no ─────────────────────
-function arrancar() {
-  const tick = async () => {
-    const { fecha, hora, diaSemana } = ahoraMadrid();
-    if (diaSemana === 0) return;                       // domingo: no avisa
-    if (hora !== HORA) return;
-    if (cargarEstado().ultimaRevision === fecha) return;  // ya se hizo hoy
-    try {
-      await ejecutar({ enviar: true });
-    } catch (e) {
-      console.error('[Vigilante] ERROR:', e.message);
-      latir(false, 'La revisión falló: ' + e.message, null);
-      await sendTelegram('KONK · vigilante de cobros\n\n⚠️ La revisión de hoy falló: '
-        + e.message + '\nLos cobros NO se han comprobado.',
-        { threadId: carrilCobros() });
-      const est = cargarEstado();
-      est.ultimaRevision = fecha;   // no reintentar en bucle durante la hora
-      guardarEstado(est);
+let enCurso = false;   // un solo intento a la vez, aunque Cloudbeds vaya lento
+
+/**
+ * Un tick del programador (cada 5 min). Devuelve qué hizo, para poder testearlo.
+ *
+ * Primer intento: a la HORA (09:xx). Si falla, NO se da el día por revisado:
+ * se apunta el fallo y se reintenta pasados REINTENTO_MIN minutos, hasta
+ * INTENTOS_DIA intentos en total y sin pasar de HORA_LIMITE. Solo cuando se
+ * agotan (o se acaba la ventana) se avisa por Telegram y el latido va en rojo.
+ */
+async function tick(ahora = ahoraMadrid(), ms = Date.now()) {
+  const { fecha, hora, diaSemana } = ahora;
+  if (diaSemana === 0) return 'domingo';              // domingo: no avisa
+  if (enCurso) return 'en-curso';
+  const est = cargarEstado();
+  if (est.ultimaRevision === fecha) return 'hecha';   // ya se hizo hoy
+
+  const prev = est.ultimoResultado && est.ultimoResultado.ok === false
+    && est.ultimoResultado.fecha === fecha ? est.ultimoResultado : null;
+  if (prev && prev.definitivo) return 'agotado';      // ya se avisó del fallo de hoy
+  if (!prev && hora !== HORA) return 'fuera-de-hora';
+
+  let intentos = prev ? prev.intentos : 0;
+  if (prev) {
+    if (hora >= HORA_LIMITE) {
+      // La ventana se cerró con un reintento pendiente: se da por perdido.
+      await rendirse(est, fecha, prev);
+      return 'agotado';
     }
-  };
-  setInterval(tick, 5 * 60 * 1000);   // cada 5 min; solo actúa en su franja
-  setTimeout(tick, 60 * 1000);
-  console.log(`[Vigilante] programado L-S a las ${HORA}:00 (${TZ})`);
+    if (ms < Date.parse(prev.proximoReintento)) return 'espera';
+  }
+
+  enCurso = true;
+  try {
+    await ejecutar({ enviar: true });
+    return 'hecha';
+  } catch (e) {
+    intentos++;
+    console.error(`[Vigilante] ERROR (intento ${intentos}/${INTENTOS_DIA}):`, e.message);
+    const fallo = {
+      ok: false, fecha, cuando: new Date(ms).toISOString(), intentos,
+      error: e.message, endpoint: e.endpoint || null,
+      definitivo: false, proximoReintento: null,
+    };
+    const est2 = cargarEstado();      // ultimaRevision NO se toca: hoy sigue sin revisar
+    if (intentos >= INTENTOS_DIA) {
+      await rendirse(est2, fecha, fallo);
+      return 'agotado';
+    }
+    fallo.proximoReintento = new Date(ms + REINTENTO_MIN * 60 * 1000).toISOString();
+    est2.ultimoResultado = fallo;
+    guardarEstado(est2);
+    return 'reintento-programado';
+  } finally {
+    enCurso = false;
+  }
+}
+
+/** Fallo definitivo: se guarda, se avisa una sola vez y el latido va en rojo. */
+async function rendirse(estado, fecha, fallo) {
+  estado.ultimoResultado = { ...fallo, definitivo: true, proximoReintento: null };
+  guardarEstado(estado);
+  latir(false, 'La revisión falló: ' + fallo.error, null);
+  try {
+    await sendTelegram('KONK · vigilante de cobros\n\n⚠️ La revisión de hoy falló tras '
+      + fallo.intentos + ' intento(s).\n'
+      + 'Llamada: ' + (fallo.endpoint || 'desconocida') + '\n'
+      + 'Error: ' + fallo.error + '\n'
+      + 'Los cobros NO se han comprobado.', { threadId: carrilCobros() });
+  } catch (e) {
+    console.error('[Vigilante] no se pudo avisar del fallo:', e.message);
+  }
+}
+
+function arrancar() {
+  setInterval(() => tick().catch(e => console.error('[Vigilante] tick:', e.message)),
+    5 * 60 * 1000);   // cada 5 min; solo actúa en su franja
+  setTimeout(() => tick().catch(e => console.error('[Vigilante] tick:', e.message)), 60 * 1000);
+  console.log(`[Vigilante] programado L-S a las ${HORA}:00 (${TZ}), `
+    + `hasta ${INTENTOS_DIA} intentos al día cada ${REINTENTO_MIN} min`);
 }
 
 /** Diagnóstico para /health: dice si el estado sobrevive a un redeploy. */
@@ -374,9 +497,13 @@ function info() {
     dataDir: DATA_DIR,
     estado: persistente ? 'persistente' : 'solo memoria',
     ...(motivo ? { motivoNoPersistente: motivo } : {}),
+    // Solo se rellena cuando la revisión TERMINÓ bien: un fallo no la mueve.
     ultimaRevision: est.ultimaRevision || null,
+    // Resultado del último intento: { ok, fecha, cuando, intentos, error?,
+    // endpoint?, definitivo?, proximoReintento? }. ok=false = hoy NO se revisó.
+    ultimoResultado: est.ultimoResultado || null,
     alarmasRecordadas: Object.keys(est.conocidos || {}).length,
   };
 }
 
-module.exports = { arrancar, ejecutar, info };
+module.exports = { arrancar, ejecutar, info, tick };

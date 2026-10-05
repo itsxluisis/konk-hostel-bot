@@ -123,7 +123,9 @@ async function getToken() {
 }
 
 // ─── Llamada genérica a la API de Cloudbeds ───────────────────────────────────
-async function api(method, path, params = {}) {
+// opts.timeout (ms) permite a un consumidor lento (p. ej. el vigilante de
+// cobros, que corre en segundo plano) subir el tope. Sin opts, 6000 como siempre.
+async function api(method, path, params = {}, opts = {}) {
   const token = await getToken();
   const propertyId = process.env.CLOUDBEDS_PROPERTY_ID;
 
@@ -163,7 +165,7 @@ async function api(method, path, params = {}) {
     // Sin esto, una Cloudbeds colgada deja el request esperando indefinidamente
     // (el bot de voz solo tiene 8s de margen por tool call). No cambia la forma
     // del error para el resto de consumidores (siguen viendo err.response igual).
-    timeout: 6000,
+    timeout: opts.timeout || 6000,
   });
 
   return res.data;

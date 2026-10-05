@@ -61,8 +61,17 @@ const fakeEstado = {
     latidos.push({ agente, ...datos });
   },
 };
+// Gancho por escenario: si devuelve algo distinto de undefined, sustituye a la
+// respuesta normal; si lanza, simula el fallo de Cloudbeds.
+let apiHook = null;
+let llamadas = [];   // { ruta, opts } de cada llamada del vigilante a api()
 const fakeCloudbeds = {
-  api: async (method, ruta, params = {}) => {
+  api: async (method, ruta, params = {}, opts = {}) => {
+    llamadas.push({ ruta, opts });
+    if (apiHook) {
+      const forzada = await apiHook(ruta, params, opts);
+      if (forzada !== undefined) return forzada;
+    }
     if (ruta === '/getReservations') {
       return { success: true, data: params.pageNumber === 1 ? RESERVAS : [] };
     }
@@ -89,16 +98,24 @@ const fakeCloudbeds = {
 };
 const fakeTelegram = { send: async t => { enviados.push(t); } };
 
+// Doble de axios para cargar el cloudbeds.js REAL (test de que el bot de voz
+// conserva sus 6 s). Registra la config de cada request; nunca toca la red.
+let configsAxios = [];
+const fakeAxios = async config => { configsAxios.push(config); return { data: { success: true, data: [] } }; };
+fakeAxios.post = async () => ({ data: { access_token: 'tok-test', refresh_token: 'ref-test', expires_in: 3600 } });
+
 // --- inyectar los dobles ------------------------------------------------------
 const real = Module.prototype.require;
 Module.prototype.require = function (id) {
   if (id === './cloudbeds') return fakeCloudbeds;
   if (id === './telegram') return fakeTelegram;
+  if (id === 'axios') return fakeAxios;
   if (id === './encargado/estado') return fakeEstado;
   return real.apply(this, arguments);
 };
 process.env.DATA_DIR = path.join(require('os').tmpdir(), 'vig-test-' + Date.now());
 process.env.VIGILANTE_DESDE = ayer(30);   // R11 salió antes del corte
+process.env.VIGILANTE_BACKOFF_MS = '1';   // los reintentos del test no esperan segundos
 const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
 // La intercepcion se queda puesta: vigilante.js carga './encargado/estado' de
 // forma perezosa, ya dentro de ejecutar(), no al importarse.
@@ -143,6 +160,149 @@ const vig = real.call(module, path.join(__dirname, '../src/vigilante.js'));
   assert.strictEqual(r3.escapados, 1, 'un Encargado caido no rompe la revision');
   assert.strictEqual(latidos.length, 0, 'y el latido simplemente se pierde');
   romperEncargado = false;
+
+  // ─── fallos de Cloudbeds: reintentos, día sin marcar, aviso al agotar ──────
+  const fs = require('fs');
+  const estadoPath = path.join(process.env.DATA_DIR, 'vigilante-estado.json');
+  const reset = () => {
+    fs.writeFileSync(estadoPath, JSON.stringify({ conocidos: {} }));
+    enviados = []; latidos = []; llamadas = []; apiHook = null;
+  };
+  const estadoDisco = () => JSON.parse(fs.readFileSync(estadoPath, 'utf8'));
+  const fechaMadrid = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid' }).format(new Date());
+  const ahoraT = hora => ({ fecha: fechaMadrid, hora, diaSemana: 2 });   // un martes
+  const T0 = Date.now();
+  const MIN = 60 * 1000;
+  const errTimeout = () => Object.assign(new Error('timeout of 30000ms exceeded'), { code: 'ECONNABORTED' });
+  const errHttp = st => Object.assign(new Error('Request failed with status code ' + st), { response: { status: st } });
+  const getReservations = () => llamadas.filter(c => c.ruta === '/getReservations').length;
+
+  // 1. el vigilante usa su propio timeout (30 s), no los 6 s del bot de voz
+  reset();
+  await vig.tick(ahoraT(9), T0);
+  assert.ok(llamadas.length > 0, 'el vigilante llama a Cloudbeds');
+  assert.ok(llamadas.every(c => c.opts.timeout === 30000), 'todas sus llamadas llevan timeout 30000');
+
+  // 2. un timeout que luego va bien: se reintenta la llamada y el dia queda hecho
+  reset();
+  let primera = true;
+  apiHook = async ruta => {
+    if (ruta === '/getReservations' && primera) { primera = false; throw errTimeout(); }
+  };
+  assert.strictEqual(await vig.tick(ahoraT(9), T0), 'hecha');
+  assert.strictEqual(getReservations(), 2, 'una llamada fallida + un reintento que va bien');
+  assert.strictEqual(estadoDisco().ultimaRevision, fechaMadrid, 'tras el reintento exitoso el dia queda revisado');
+  assert.strictEqual(estadoDisco().ultimoResultado.ok, true);
+  assert.ok(!enviados.some(t => t.includes('falló')), 'no hay aviso de fallo si el reintento funcionó');
+
+  // 3. 429 y 5xx tambien se reintentan; ECONNRESET igual
+  for (const fallo of [errHttp(429), errHttp(503), Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })]) {
+    reset();
+    let una = true;
+    apiHook = async ruta => { if (ruta === '/getReservations' && una) { una = false; throw fallo; } };
+    assert.strictEqual(await vig.tick(ahoraT(9), T0), 'hecha');
+    assert.strictEqual(getReservations(), 2, 'se reintenta ante ' + (fallo.code || fallo.response.status));
+  }
+
+  // 4. 401 / 403 / 400: sin reintento de la llamada
+  for (const st of [401, 403, 400]) {
+    reset();
+    apiHook = async ruta => { if (ruta === '/getReservations') throw errHttp(st); };
+    await vig.tick(ahoraT(9), T0);
+    assert.strictEqual(getReservations(), 1, `un ${st} NO se reintenta`);
+    assert.strictEqual(estadoDisco().ultimaRevision || null, null, `tras un ${st} el dia no se da por revisado`);
+    assert.strictEqual(estadoDisco().ultimoResultado.endpoint, 'GET /getReservations');
+    reset();
+  }
+
+  // 5. fallo total: no marca ultimaRevision, deja reintento a los 20 min, avisa solo al agotar
+  reset();
+  apiHook = async ruta => { if (ruta === '/getReservations') throw errTimeout(); };
+  assert.strictEqual(await vig.tick(ahoraT(9), T0), 'reintento-programado');
+  assert.strictEqual(getReservations(), 3, 'la llamada se intenta 1 + 2 reintentos antes de rendirse');
+  let est = estadoDisco();
+  assert.strictEqual(est.ultimaRevision || null, null, 'el fallo NO marca ultimaRevision');
+  assert.strictEqual(est.ultimoResultado.ok, false);
+  assert.strictEqual(est.ultimoResultado.intentos, 1);
+  assert.strictEqual(Date.parse(est.ultimoResultado.proximoReintento), T0 + 20 * MIN, 'reintento a los 20 min');
+  assert.strictEqual(enviados.length, 0, 'sin aviso a Telegram mientras queden reintentos');
+  assert.strictEqual(latidos.length, 0, 'ni latido en rojo todavia');
+  assert.strictEqual(vig.info().ultimaRevision || null, null, '/health no dice que se reviso');
+  assert.strictEqual(vig.info().ultimoResultado.ok, false, '/health expone el fallo');
+  assert.ok('ultimaRevision' in vig.info() && 'horario' in vig.info(), '/health conserva su formato');
+
+  llamadas = [];
+  assert.strictEqual(await vig.tick(ahoraT(9), T0 + 5 * MIN), 'espera', 'antes de los 20 min no reintenta');
+  assert.strictEqual(llamadas.length, 0, 'y no llama a Cloudbeds');
+
+  assert.strictEqual(await vig.tick(ahoraT(9), T0 + 20 * MIN), 'reintento-programado');
+  assert.strictEqual(estadoDisco().ultimoResultado.intentos, 2);
+  assert.strictEqual(enviados.length, 0);
+
+  assert.strictEqual(await vig.tick(ahoraT(10), T0 + 40 * MIN), 'agotado', 'tercer fallo = definitivo');
+  est = estadoDisco();
+  assert.strictEqual(est.ultimaRevision || null, null, 'agotados los reintentos, hoy sigue sin revisar');
+  assert.strictEqual(est.ultimoResultado.definitivo, true);
+  assert.strictEqual(enviados.length, 1, 'un solo aviso de fallo, al agotar');
+  assert.ok(enviados[0].includes('GET /getReservations'), 'el aviso dice que llamada fallo');
+  assert.ok(enviados[0].includes('timeout of 30000ms exceeded'), 'y el error');
+  assert.ok(enviados[0].includes('NO se han comprobado'));
+  assert.strictEqual(latidos.length, 1, 'un latido, en rojo');
+  assert.strictEqual(latidos[0].ok, false);
+
+  assert.strictEqual(await vig.tick(ahoraT(10), T0 + 60 * MIN), 'agotado', 'no sigue intentando ni avisando');
+  assert.strictEqual(enviados.length, 1, 'sin avisos duplicados');
+  assert.strictEqual(await vig.tick(ahoraT(9), T0 + 80 * MIN), 'agotado');
+
+  // 6. fallo y reintento que va bien: un solo aviso (el de las alarmas), latido en verde
+  reset();
+  let rota = true;
+  apiHook = async ruta => { if (ruta === '/getReservations' && rota) throw errTimeout(); };
+  assert.strictEqual(await vig.tick(ahoraT(9), T0), 'reintento-programado');
+  rota = false;
+  assert.strictEqual(await vig.tick(ahoraT(9), T0 + 20 * MIN), 'hecha');
+  est = estadoDisco();
+  assert.strictEqual(est.ultimaRevision, fechaMadrid, 'el reintento que funciona marca el dia');
+  assert.strictEqual(est.ultimoResultado.ok, true);
+  assert.strictEqual(est.ultimoResultado.intentos, 2);
+  assert.strictEqual(enviados.length, 1, 'el aviso de cobros sale una sola vez');
+  assert.ok(!enviados[0].includes('falló'), 'y no es un aviso de fallo');
+  assert.deepStrictEqual(latidos.map(l => l.ok), [true]);
+  assert.strictEqual(await vig.tick(ahoraT(9), T0 + 40 * MIN), 'hecha', 'revisado: no se vuelve a ejecutar');
+
+  // 7. se cierra la ventana con un reintento pendiente: se da por perdido y se avisa
+  reset();
+  apiHook = async ruta => { if (ruta === '/getReservations') throw errTimeout(); };
+  await vig.tick(ahoraT(9), T0);
+  assert.strictEqual(await vig.tick(ahoraT(12), T0 + 20 * MIN), 'agotado');
+  assert.strictEqual(enviados.length, 1);
+  assert.strictEqual(latidos[0].ok, false);
+
+  // 8. fuera de hora y domingo: no arranca
+  reset();
+  assert.strictEqual(await vig.tick(ahoraT(15), T0), 'fuera-de-hora');
+  assert.strictEqual(await vig.tick({ fecha: fechaMadrid, hora: 9, diaSemana: 0 }, T0), 'domingo');
+  assert.strictEqual(llamadas.length, 0);
+
+  // 9. el bot de voz conserva sus 6 s: api() sin opts sigue en 6000
+  const cb = real.call(module, path.join(__dirname, '../src/cloudbeds.js'));
+  await cb.exchangeCode('codigo-de-prueba');
+  configsAxios = [];
+  await cb.api('GET', '/getRooms');
+  assert.strictEqual(configsAxios[0].timeout, 6000, 'api() por defecto: 6000 ms');
+  await cb.getAvailability('2099-01-01', '2099-01-02', 1);
+  assert.ok(configsAxios.length >= 3);
+  assert.ok(configsAxios.slice(1).every(c => c.timeout === 6000), 'getAvailability (bot de voz): 6000 ms');
+  await cb.api('GET', '/getRooms', {}, { timeout: 30000 });
+  assert.strictEqual(configsAxios[configsAxios.length - 1].timeout, 30000, 'timeout por llamada solo si se pide');
+
+  console.log('  ✓ el vigilante usa timeout propio de 30 s');
+  console.log('  ✓ reintenta ante timeout, 429, 5xx y ECONNRESET; el reintento exitoso marca el dia');
+  console.log('  ✓ 400/401/403 no se reintentan');
+  console.log('  ✓ fallo total: no marca ultimaRevision, reintento a los 20 min, un solo aviso al agotar');
+  console.log('  ✓ /health no hace creer que se reviso tras un fallo');
+  console.log('  ✓ ventana cerrada con reintento pendiente = fallo definitivo; domingo y fuera de hora no corren');
+  console.log('  ✓ el bot de voz conserva su timeout de 6 s');
 
   console.log('  ✓ excluye Booking, Airbnb y Expedia');
   console.log('  ✓ detecta escapado, parcial y cobrado de mas');

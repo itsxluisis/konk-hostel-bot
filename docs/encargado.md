@@ -1018,6 +1018,15 @@ En el hostel es corriente que alguien alargue la estancia registrada como una re
 
 El único agente que sigue en el Mac es el **Facturador Konk** (lunes).
 
+### Vigilante de cobros — resiliencia ante un Cloudbeds lento (5-oct-2026)
+
+Incidente: el 5-oct a las 09:02 la revisión falló con `timeout of 6000ms exceeded` (el timeout de 6 s de `api()` es el del bot de voz) y el `catch` daba el día por revisado: sin reintento hasta mañana y `/health` decía que se había revisado.
+
+- **Cada llamada** del vigilante lleva su propio timeout (`VIGILANTE_TIMEOUT_MS`, 30 s) y se reintenta con espera creciente (3 s, 6 s) ante timeout, corte de red, 429 y 5xx. Un 4xx (401/403 auth, 400…) no se reintenta. El bot de voz sigue con sus 6 s: `api(method, ruta, params, { timeout })` solo cambia el tope si se le pasa.
+- **La revisión completa**: si falla, `ultimaRevision` NO se marca y se programa otro intento a los 20 min (máx. 3 al día, nunca a partir de las 12:00 de Madrid; el primero sigue siendo a las 09:xx). Mientras queden intentos no hay aviso ni latido en rojo. Al agotarlos (o cerrarse la ventana con un reintento pendiente) sale **un** aviso a Cobros con la llamada que falló (`GET /getReservations`) y el error, y el latido va en rojo.
+- **`/health.vigilante`** conserva su formato y añade `ultimoResultado` (`ok`, `fecha`, `cuando`, `intentos`, y si falló `error`, `endpoint`, `definitivo`, `proximoReintento`). `ultimaRevision` solo avanza cuando la revisión terminó bien (así el parte de las 09:15 también deja de creer que se revisó). Ese estado vive en `vigilante-estado.json`: con volumen persistente sobrevive a un redeploy; sin él, un redeploy a mitad de los reintentos los pierde.
+- **Variables** (todas opcionales): `VIGILANTE_TIMEOUT_MS` (30000), `VIGILANTE_REINTENTOS_API` (2), `VIGILANTE_BACKOFF_MS` (3000), `VIGILANTE_INTENTOS_DIA` (3), `VIGILANTE_REINTENTO_MIN` (20), `VIGILANTE_HORA_LIMITE` (12).
+
 ---
 
 ## Los siete carriles — Organización de temas en Telegram (10-sep-2026)
